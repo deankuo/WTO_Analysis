@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # WTO Dispute Settlement Network Analysis
 
 ## 📋 Project Overview
@@ -191,3 +192,7 @@ calculate_centrality_metrics(G)             # Node importance measures
 - **Third Parties**: 8 countries (Brazil, Canada, China, Egypt, European Union, India, Japan, Kazakhstan, Mexico, Norway, Russian Federation)
 
 ## 🚀 Getting Started
+=======
+# WTO_Analysis
+This is the code repository for "More Trade, More Dispiutes? Measuring Alliance Effect on WTO Conflicts"
+>>>>>>> a979b69831f68e4c8ac73f7f892c0da070630d1d

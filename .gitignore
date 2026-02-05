@@ -164,10 +164,13 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+<<<<<<< HEAD
 .claude/
 .vscode/
 __pycache__/
 .DS_Store
+=======
+>>>>>>> a979b69831f68e4c8ac73f7f892c0da070630d1d
 
 # Spyder project settings
 .spyderproject
@@ -229,4 +232,8 @@ cython_debug/
 # Marimo
 marimo/_static/
 marimo/_lsp/
+<<<<<<< HEAD
 __marimo__/
+=======
+__marimo__/
+>>>>>>> a979b69831f68e4c8ac73f7f892c0da070630d1d
