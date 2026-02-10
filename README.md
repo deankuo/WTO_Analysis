@@ -1,193 +1,155 @@
-# WTO Dispute Settlement Network Analysis
+# WTO Dispute Settlement Network Analysis & RAG System
 
-## 📋 Project Overview
+## Project Overview
 
-This project analyzes World Trade Organization (WTO) dispute settlement cases through network analysis and relationship modeling. We examine the complex relationships between complainant countries, respondent countries, and third-party participants to understand patterns in international trade disputes.
+This project analyzes World Trade Organization (WTO) dispute settlement cases through:
+1. **Social Network Analysis (SNA)**: Mapping relationships between countries in trade disputes
+2. **Document Processing Pipeline**: Renaming, classifying, and extracting text from 9,435 PDFs across 626 cases
+3. **RAG System**: Retrieval-augmented generation for LLM-based case severity comparison
 
-**Project Start Date:** 
 **Data Source:** [WTO Dispute Settlement](https://www.wto.org/english/tratop_e/dispu_e/dispu_e.htm)
 
-## 🎯 Research Objectives
-
-1. **Network Relationship Analysis**: Map and analyze relationships between countries in WTO dispute cases
-2. **Conflict Pattern Identification**: Identify patterns in trade conflicts and cooperation
-3. **Third-Party Behavior Study**: Understand how third-party countries position themselves in disputes
-4. **Temporal Analysis**: Track how relationships evolve over time
-5. **Predictive Modeling**: Develop models to predict dispute outcomes and third-party alignment
-
-## 📊 Dataset Structure
-
-### Core Features
-
-| Feature Name | Type | Description | Example Values |
-|--------------|------|-------------|----------------|
-| **Title (Dispute)** | string | Official case title | "EC --- Selected Customs Matters" |
-| **Current Status** | category | Current stage of dispute resolution | "Report(s) adopted", "Panel report under appeal" |
-| **Complainant** | agent (country) | Country filing the complaint | United States, Canada |
-| **Respondent** | agent (country) | Country being complained against | European Communities, Australia |
-| **Third Parties** | agents (countries) | Countries participating as third parties | Multiple countries listed |
-
-### Key Dates and Timeline Features
-
-- **Consultations Requested**: Initial consultation date
-- **Panel Requested**: Date panel establishment was requested
-- **Panel Established**: Date panel was officially established
-- **Panel Report Circulated**: Date panel report was published
-- **Appellate Body Report**: Date of appellate decision (if applicable)
-
-### Legal Framework Features
-
-- **Agreements Cited (Consultation)**: Legal articles cited in consultation request
-- **Agreements Cited (Panel)**: Legal articles cited in panel request
-- **Mutually Agreed Solution**: Whether parties reached agreement outside formal process
-
-## 🏗️ Project Structure
+## Project Structure
 
 ```
-wto-dispute-analysis/
-├── README.md                   # This file
+WTO/
 ├── data/
-│   ├── raw/                    # Scrapped data 
-│       └── wto_cases.csv       # Source data file
-│   ├── processed/              # Cleaned and engineered                               
-features
-├── src/
-│   ├── WTO.ipynb               # Web Scrapping
-│   ├── network_analysis.py     # Network metrics calculation
-│   ├── sentiment_analysis.py   # Text analysis of legal documents
-│   ├── temporal_analysis.py    # Time-series analysis
-│   └── data_processing.py      # Data cleaning and feature engineering
-├── analysis/
-│   ├── exploratory/            # Exploratory data analysis notebooks
-│   ├── temporal_analysis.py    # Network analysis results
-│   └── reports/                # Analysis reports and findings
-├── visualization/
-│   ├── network_viz.py         # Network visualization tools
-│   ├── dashboard.py           # Interactive dashboard
-│   └── plots/                 # Generated visualizations
-├── models/
-│   ├── prediction_models.py   # Outcome prediction models
-│   └── trained_models/        # Saved model files
-├── tests/
-│   └── test_*.py              # Unit tests
-├── docs/
-│   ├── methodology.md         # Detailed methodology
-│   ├── notes.md               # Notes of issues and questions
-│   ├── case_studies.md        # Detailed case analysis
-│   └── api_documentation.md   # Code documentation
-├── requirements.txt           # Python dependencies
-└── config.yaml               # Configuration settings
+│   └── wto_cases.csv              # Case metadata (626 cases)
+├── WTO_DSB_Cases/
+│   └── [1-629]/                   # PDF documents by case number (9,435 files)
+├── utils/
+│   ├── filename_parser.py         # WTO filename pattern parsing (20+ patterns)
+│   ├── text_cleaner.py            # Content extraction & header cleaning
+│   ├── processor.py               # Main orchestrator, naming, output
+│   ├── basic_matrix.py            # SNA network metrics
+│   └── visualization.py           # Network visualization
+├── rag/
+│   ├── config.py                  # ChromaDB & embedding settings
+│   ├── indexer.py                 # JSONL -> ChromaDB indexing
+│   └── retriever.py               # Semantic search with metadata filters
+├── scripts/
+│   ├── process_sample.py          # Process sample cases
+│   ├── process_all.py             # Process all 626 cases
+│   └── build_index.py             # Build vector index
+├── Output/
+│   ├── sample/                    # Sample outputs (CSV, JSONL, manifests)
+│   └── full/                      # Full run outputs
+├── wto_document_processor.py      # Legacy monolithic processor (superseded by utils/)
+├── CLAUDE.md                      # Development guidance
+└── README.md                      # This file
 ```
 
-## 🔬 Methodology
+## Document Processing Pipeline
 
-### Network Construction
+### What It Does
 
-1. **Node Creation**: Each country becomes a node in the network
-2. **Edge Creation**: Relationships based on dispute roles:
-   - Direct edges between complainants and respondents
-   - Indirect edges through third-party participation
-3. **Edge Weighting**: Based on multiple factors:
-   - Frequency of interaction
-   - Outcome favorability
-   - Legal citation complexity
+1. **Parses filenames** to extract structural metadata (case number, document class, variant, part)
+2. **Extracts text** using PyPDFLoader, with OCR fallback (Tesseract) for scanned PDFs
+3. **Reads first page** to extract date, WTO header codes, agreement indicators, document type
+4. **Filters TOC pages** from long documents (>5 pages) using pattern detection
+5. **Generates semantic filenames**: `DS{case}_SEQ{nn}_{DocType}[_Suffix].pdf`
+6. **Outputs**: metadata CSV (no text), JSONL with clean text, rename manifest, third-party joiners, manual review list
 
-### Analytical Approaches
+### Processing Statistics (Feb 2026)
 
-#### 1. Index
-- Nodes
-- Edges (Compliant-Respondent; Compliant-Third Parties; Third Parties-Respondent)
-- Conflict Density; Support Ratio (equals to 1)
-- balanced / unbalanced triangle (weighting should be 1 of each edge)
-- Community (Currently using Louvain algorithm)
-   - Group members
-   - Internal relations
-   - Type (Cooperate / Conflict / Mixed)
-   - Modified Modularity (Currently considering positive & negative relations) / Modularity
-   - Clustering
-   - Centrality
-   - Betweenness
-   - Positive Degree
-   - Negative Degree
+- **Total documents**: 9,480 PDFs across 626 cases
+- **Successfully classified**: 9,398 (99.1%)
+- **Manual review**: 82 files (78 scanned, 3 non-English, 1 error)
+- **Document types**: 35 consolidated types (from 56)
+- **Date coverage**: ~90% (multilingual + inheritance)
+- **Multi-part documents**: Automatic inheritance working
 
-#### 2. Text Processing
-   - WTO DSB Web Scrapping
-   - Landing AI parse the best
-   - What to include and what to exclude? (Report?)
-   - How to measure the intensity between countries?
-   - RAG + LLM?
+### Naming Convention
 
-#### 3. RAG
-   - Dense retrieval 
-   - Adaptive RAG
+| Pattern | Example |
+|---------|---------|
+| Base document | `DS135_SEQ04_Note_By_Secretariat.pdf` |
+| With variant | `DS626_SEQ02_Request_For_Consultations_Corr.pdf` |
+| Multi-part | `DS135_SEQ13_Report_Of_Panel_00.pdf` |
+| Duplicate type | `DS135_SEQ05_Communication_From_Chairman_Of_Panel_00.pdf` |
 
-#### 3. Structural Analysis
-- **Balance Theory**: Analyzing balanced vs. unbalanced triads
-- **Community Detection**: Identifying country clusters/alliances
-- **Centrality Analysis**: Identifying key players in dispute network
+### Quick Start
 
-#### 4. Temporal Analysis
-- **Longitudinal Networks**: Year-by-year network evolution
-- **Relationship Persistence**: How long relationships last
-- **Conflict Escalation Patterns**: Paths from consultation to retaliation
+```bash
+# Process sample (cases 135, 624, 625, 626)
+python scripts/process_sample.py
 
-#### 5. Text Analysis
-- **Sentiment Analysis**: Emotional tone in legal submissions
-- **Legal Citation Analysis**: Complexity and types of laws cited
-- **Argument Similarity**: Comparing third-party positions
+# Process all 626 cases (dry run)
+python scripts/process_all.py
 
-## 📈 Key Research Questions
-
-### Primary Questions
-1. **What factors predict third-party alignment in WTO disputes?**
-2. **How do bilateral trade relationships influence dispute outcomes?**
-3. **Can we predict case escalation from consultation to panel stage?**
-4. **What network positions make countries more likely to be involved in disputes?**
-
-### Secondary Questions
-1. How has the dispute settlement system evolved since WTO establishment?
-2. Are there persistent "coalition" patterns among countries?
-3. What role do regional trade agreements play in dispute patterns?
-4. How do different legal areas (anti-dumping, SPS, etc.) show different network patterns?
-
-## 🛠️ Technical Implementation
-
-### Core Technologies
-- **Python 3.8+**: Primary programming language
-- **NetworkX**: Network analysis and graph theory
-- **Pandas**: Data manipulation and analysis
-- **Scikit-learn**: Machine learning models
-- **Plotly/Dash**: Interactive visualizations
-- **NLTK/spaCy**: Natural language processing
-
-### Key Network Analysis Functions
-
-```python
-# Core analytical functions from src/network_analysis.py
-calculate_conflict_metrics(G, edge_count)    # Overall network conflict measures
-calculate_triangle_metrics(G)               # Balanced/unbalanced relationship triads
-calculate_modularity(G)                     # Community structure strength
-calculate_centrality_metrics(G)             # Node importance measures
+# Execute renames
+python scripts/process_all.py --rename
 ```
 
-## 📋 Sample Cases
+## RAG System
 
-### DS315: European Communities - Selected Customs Matters
-- **Complainant**: United States
-- **Respondent**: European Communities  
-- **Status**: Report(s) adopted, with recommendation to bring measure(s) into conformity
-- **Third Parties**: 9 countries (Argentina, Australia, Brazil, China, Chinese Taipei, Hong Kong China, India, Japan, Korea)
+Uses ChromaDB with child-chunk retrieval. Documents are chunked into small pieces for semantic search, with full document context available via metadata.
 
-### DS18: Australia - Measures Affecting Importation of Salmon
-- **Complainant**: Canada
-- **Respondent**: Australia
-- **Status**: Mutually agreed solution notified
-- **Third Parties**: 4 countries (European Communities, India, Norway, United States)
+```bash
+# Build index from processed JSONL
+python scripts/build_index.py --input Output/sample/wto_sample.jsonl
+```
 
-### DS539: US - Anti-Dumping and Countervailing Duties (Korea)
-- **Complainant**: Korea, Republic of
-- **Respondent**: United States
-- **Status**: Panel report under appeal
-- **Third Parties**: 8 countries (Brazil, Canada, China, Egypt, European Union, India, Japan, Kazakhstan, Mexico, Norway, Russian Federation)
+Requires `OPENAI_API_KEY` in `.env` file.
 
-## 🚀 Getting Started
+## Social Network Analysis
+
+### Network Model
+
+- **Nodes**: Countries/entities
+- **Edge Types**:
+  - Complainant <-> Respondent: Conflict (red)
+  - Complainant <-> Third Party: Cooperation (green)
+  - Respondent <-> Third Party: Complex (orange)
+- **Community Detection**: Louvain algorithm with modified modularity for signed networks
+
+### Key Metrics
+
+- Conflict density, modularity, centrality, betweenness
+- Balanced/unbalanced triangle analysis
+- Community detection with internal relation typing
+
+## Research Objectives
+
+1. Map and analyze relationships between countries in WTO dispute cases
+2. Identify patterns in trade conflicts and cooperation
+3. Build LLM-as-judge system for case severity comparison:
+   - Severity relative to complainant's historical cases
+   - Severity compared to similar industry cases
+4. Develop predictive models for dispute outcomes
+
+## Environment Setup
+
+### Python Dependencies
+
+```bash
+pip install langchain langchain-community langchain-openai chromadb networkx pandas matplotlib selenium pypdf pytesseract pdf2image
+```
+
+### System Dependencies (for OCR)
+
+```bash
+# macOS
+brew install tesseract poppler
+
+# Ubuntu/Debian
+sudo apt-get install tesseract-ocr poppler-utils
+
+# Windows
+# Download from: https://github.com/UB-Mannheim/tesseract/wiki
+```
+
+### Environment Variables
+
+Create `.env` file:
+```
+OPENAI_API_KEY=your_key_here
+LANGCHAIN_API_KEY=your_key_here  # optional, for LangSmith tracing
+```
+
+## Dataset
+
+- **626 cases** with metadata (complainant, respondent, third parties, agreements, stage)
+- **9,435 PDFs** across 629 folders
+- **40+ document types** identified (requests, reports, communications, notifications, etc.)
+- Coverage: 1995-2024
