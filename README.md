@@ -147,9 +147,30 @@ OPENAI_API_KEY=your_key_here
 LANGCHAIN_API_KEY=your_key_here  # optional, for LangSmith tracing
 ```
 
-## Dataset
+## Datasets
 
-- **626 cases** with metadata (complainant, respondent, third parties, agreements, stage)
-- **9,435 PDFs** across 629 folders
-- **40+ document types** identified (requests, reports, communications, notifications, etc.)
-- Coverage: 1995-2024
+### WTO Case Data
+
+- **626 cases** (DS1–DS626) with metadata: complainant, respondent, third parties, agreements cited, procedural dates, dispute stage
+- **9,480 PDFs** across 629 folders, processed into 35 document types
+- Coverage: 1995–2024
+
+### Country-Year Analysis Panel (`Data/country_meta_1995_2024.csv`)
+
+A comprehensive country-year panel integrating six major data sources for **196 countries/polities × 30 years (1995–2024)** = 5,880 observations and 77 variables.
+
+| Source | Variables | Coverage |
+|--------|-----------|----------|
+| WTO membership & dispute records | `wto_member`, `complainant`, `respondent`, `third_party`, cumulative counts | 1995–2024 |
+| World Development Indicators (WDI) | GDP, GDP per capita, population, trade, FDI, exports, imports, unemployment | 1995–2024 |
+| Worldwide Governance Indicators (WGI) | Voice, stability, efficiency, regulatory quality, rule of law, corruption | 1995–2024 (interpolated for pre-2002 gaps) |
+| UN Voting Ideal Points (Bailey, Strezhnev & Voeten 2017) | `idealpointfp`, `idealpointall`, posterior quantiles | 1995–2024 |
+| V-Dem v15 | Electoral democracy, liberal democracy, regime type, election type | 1995–2024 |
+| COW NMC 6.0 | CINC, military expenditures, military personnel, energy consumption, population | 1995–**2016** only |
+| EU / ATOP alliance data | EU membership, eurozone, alliance obligations | 1995–2024 |
+
+> See [`Data/Data.md`](Data/Data.md) for the full variable codebook, source citations with page references, range/unit details, and systematic missing data documentation.
+
+### Dyads Dataset (Forthcoming)
+
+A directed country-pair-year panel (`dyads_1995_2024.csv`) capturing bilateral dispute history, UN voting alignment, trade flows, and ATOP alliance obligations. Structure documented in `Data/Data.md`.
