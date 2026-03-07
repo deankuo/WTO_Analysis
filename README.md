@@ -30,7 +30,8 @@ WTO/
 ├── scripts/
 │   ├── process_sample.py          # Process sample cases
 │   ├── process_all.py             # Process all 626 cases
-│   └── build_index.py             # Build vector index
+│   ├── build_index.py             # Build vector index
+│   └── build_baci_trade.py        # BACI trade aggregation (dual EU representation)
 ├── Output/
 │   ├── sample/                    # Sample outputs (CSV, JSONL, manifests)
 │   └── full/                      # Full run outputs
@@ -170,6 +171,19 @@ A comprehensive country-year panel integrating six major data sources for **196 
 | EU / ATOP alliance data | EU membership, eurozone, alliance obligations | 1995–2024 |
 
 > See [`Data/Data.md`](Data/Data.md) for the full variable codebook, source citations with page references, range/unit details, and systematic missing data documentation.
+
+### Bilateral Trade Datasets
+
+Constructed from BACI HS92 data by `scripts/build_baci_trade.py`. Uses **dual EU representation**: individual EU member states retain their own trade rows (including intra-EU trade) while an `EUN` aggregate captures the EU as a single external trade actor. Includes paired `export_dependence` and `import_dependence` indices measuring asymmetric bilateral trade interdependence.
+
+| File | Unit | Rows |
+|------|------|------|
+| `Data/bilateral_trade_aggregate.csv` | Directed dyad-year | ~1.2M |
+| `Data/bilateral_trade_by_section.csv` | Directed dyad-year-section | ~10M |
+| `Data/baci_to_iso3_mapping.csv` | Reference mapping | ~250 |
+| `Data/eu_membership_1995_2024.csv` | Country-year (28 EU members x 30 years) | 840 |
+
+> See [`Data/Data.md`](Data/Data.md) Sections 6--8 for full column definitions and EU representation details.
 
 ### Dyads Dataset (Forthcoming)
 
