@@ -51,7 +51,7 @@ BELGLUX_CODE = 58
 EU_MEMBER_INFO = [
     # (country, iso3c, ccode, baci_code, accession_year, exit_year_or_None)
     ("Austria",        "AUT",  305,  40,  1995, None),
-    ("Belgium",        "BEL",   211,  56,  1995, None),
+    ("Belgium",        "BEL",  211,  56,  1995, None),
     ("Denmark",        "DNK",  390, 208,  1995, None),
     ("Finland",        "FIN",  375, 246,  1995, None),
     ("France",         "FRA",  220, 251,  1995, None),
@@ -222,7 +222,7 @@ def _compute_indices(df: pd.DataFrame, year: int) -> tuple[pd.DataFrame, pd.Data
 
     dys["bilateral_sector_concentration"] = dys["trade_value_ij_s"] / dys["total_exports_i"]
     dys["sector_export_concentration"] = dys["total_exports_i_s"] / dys["total_exports_i"]
-    dys["export_dependence"] = np.where(
+    dys["partner_sector_dependence"] = np.where(
         dys["total_exports_i_s"] > 0,
         dys["trade_value_ij_s"] / dys["total_exports_i_s"],
         np.nan,
@@ -375,41 +375,28 @@ def convert_codes(df: pd.DataFrame, code_to_iso3: dict,
 
 # -- Step 4: Merge GDP --------------------------------------------------------
 
-def merge_gdp(dys: pd.DataFrame, dya: pd.DataFrame,
-              panel: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def merge_gdp(dya: pd.DataFrame, panel: pd.DataFrame) -> pd.DataFrame:
     """
-    Merge GDP from panel data and compute GDP-based indices.
+    Merge GDP and compute trade_dependence = (exports_ij + imports_ij) / gdp_i.
     GDP is in millions USD; BACI trade values in thousands USD.
+    imports_ij is kept internally for this computation but not in final output.
     """
     gdp_df = panel[["iso3c", "year", "gdp"]].drop_duplicates()
 
-    # Merge into dyad-year-section
-    dys = dys.merge(
-        gdp_df, left_on=["exporter", "year"], right_on=["iso3c", "year"], how="left"
-    ).drop(columns=["iso3c"])
-
-    # bilateral_sector_gdp_share = trade_value_ij_s (thousands) / gdp (millions)
-    # = (trade * 1000) / (gdp * 1_000_000) = trade / (gdp * 1000)
-    dys["bilateral_sector_gdp_share"] = np.where(
-        dys["gdp"].notna() & (dys["gdp"] > 0),
-        dys["trade_value_ij_s"] / (dys["gdp"] * 1000),
-        np.nan,
-    )
-    dys = dys.drop(columns=["gdp"])
-
-    # Merge into dyad-year aggregate
     dya = dya.merge(
         gdp_df, left_on=["exporter", "year"], right_on=["iso3c", "year"], how="left"
     ).drop(columns=["iso3c"])
 
-    dya["bilateral_trade_gdp_share"] = np.where(
+    # trade_dependence = (exports_ij + imports_ij) / gdp_i
+    # BACI values in thousands, GDP in millions: divide by (gdp * 1000)
+    dya["trade_dependence"] = np.where(
         dya["gdp"].notna() & (dya["gdp"] > 0),
-        dya["total_trade_ij"] / (dya["gdp"] * 1000),
+        (dya["total_trade_ij"] + dya["imports_i_from_j"]) / (dya["gdp"] * 1000),
         np.nan,
     )
     dya = dya.drop(columns=["gdp"])
 
-    return dys, dya
+    return dya
 
 
 # -- EU Membership Panel ------------------------------------------------------
@@ -529,13 +516,10 @@ def print_summary(dya: pd.DataFrame, dys: pd.DataFrame):
         print("  No Taiwan export data for 2020!")
 
     # GDP merge coverage
-    n_gdp = dya["bilateral_trade_gdp_share"].notna().sum()
+    n_gdp = dya["trade_dependence"].notna().sum()
     print(f"\n--- GDP Merge Coverage ---")
-    print(f"  Dyad-year aggregate: {n_gdp:,}/{len(dya):,} rows have GDP-based index "
+    print(f"  Dyad-year aggregate: {n_gdp:,}/{len(dya):,} rows have trade_dependence "
           f"({n_gdp / len(dya) * 100:.1f}%)")
-    n_gdp_s = dys["bilateral_sector_gdp_share"].notna().sum()
-    print(f"  Dyad-year-section:   {n_gdp_s:,}/{len(dys):,} rows have GDP-based index "
-          f"({n_gdp_s / len(dys) * 100:.1f}%)")
 
 
 # -- Main ---------------------------------------------------------------------
@@ -577,7 +561,7 @@ def main():
 
     # Step 4: Merge GDP
     print("Merging GDP from panel data...")
-    dys_all, dya_all = merge_gdp(dys_all, dya_all, panel)
+    dya_all = merge_gdp(dya_all, panel)
 
     # Step 5: Save outputs
     print("\nSaving outputs...")
@@ -586,9 +570,9 @@ def main():
     dya_cols = [
         "year", "exporter", "exporter_ccode", "exporter_name",
         "importer", "importer_ccode", "importer_name",
-        "total_trade_ij", "imports_i_from_j", "n_products_ij", "n_sections_ij",
-        "export_dependence", "import_dependence",
-        "bilateral_trade_gdp_share", "total_exports_i", "total_imports_i",
+        "total_trade_ij", "n_products_ij", "n_sections_ij",
+        "export_dependence", "trade_dependence",
+        "total_exports_i",
     ]
     dya_out = dya_all[dya_cols].sort_values(["year", "exporter", "importer"])
     dya_path = os.path.join(OUTPUT_DIR, "bilateral_trade_aggregate.csv")
@@ -599,12 +583,10 @@ def main():
     dys_cols = [
         "year", "exporter", "exporter_ccode", "importer", "importer_ccode",
         "section_num", "section_en",
-        "trade_value_ij_s", "imports_i_from_j_s", "n_products_ij_s",
+        "trade_value_ij_s", "n_products_ij_s",
         "bilateral_sector_concentration", "sector_export_concentration",
-        "export_dependence", "import_dependence",
-        "bilateral_sector_gdp_share",
+        "partner_sector_dependence",
         "total_exports_i", "total_exports_i_s",
-        "total_imports_i", "total_imports_i_s",
     ]
     dys_out = dys_all[dys_cols].sort_values(["year", "exporter", "importer", "section_num"])
     dys_path = os.path.join(OUTPUT_DIR, "bilateral_trade_by_section.csv")
