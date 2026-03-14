@@ -13,31 +13,38 @@ This project analyzes World Trade Organization (WTO) dispute settlement cases th
 
 ```
 WTO/
-├── data/
-│   └── wto_cases.csv              # Case metadata (626 cases)
+├── Data/
+│   ├── country_meta_1995_2024.csv      # Country-year panel (196 x 30 years, 77 cols)
+│   ├── wto_cases.csv                   # Case metadata (626 cases)
+│   ├── wto_dyadic.csv                  # WTO dispute dyads (8,145 rows)
+│   ├── bilateral_trade_wto.csv         # Dyad-year trade + ATOP + DESTA (545k rows)
+│   ├── bilateral_trade_section_wto.csv # Dyad-year-section trade (6.4M rows)
+│   ├── desta_panel_1995_2025.csv       # DESTA trade agreement panel (235k rows)
+│   └── wto_mem_list.csv                # WTO membership list (166 members)
 ├── WTO_DSB_Cases/
-│   └── [1-629]/                   # PDF documents by case number (9,435 files)
+│   └── [1-629]/                        # PDF documents by case number (9,480 files)
 ├── utils/
-│   ├── filename_parser.py         # WTO filename pattern parsing (20+ patterns)
-│   ├── text_cleaner.py            # Content extraction & header cleaning
-│   ├── processor.py               # Main orchestrator, naming, output
-│   ├── basic_matrix.py            # SNA network metrics
-│   └── visualization.py           # Network visualization
+│   ├── filename_parser.py              # WTO filename pattern parsing (20+ patterns)
+│   ├── text_cleaner.py                 # Content extraction & header cleaning
+│   ├── processor.py                    # Main orchestrator, naming, output
+│   ├── basic_matrix.py                 # SNA network metrics
+│   └── visualization.py               # Network visualization
 ├── rag/
-│   ├── config.py                  # ChromaDB & embedding settings
-│   ├── indexer.py                 # JSONL -> ChromaDB indexing
-│   └── retriever.py               # Semantic search with metadata filters
+│   ├── config.py                       # ChromaDB & embedding settings
+│   ├── indexer.py                      # JSONL -> ChromaDB indexing
+│   └── retriever.py                    # Semantic search with metadata filters
 ├── scripts/
-│   ├── process_sample.py          # Process sample cases
-│   ├── process_all.py             # Process all 626 cases
-│   ├── build_index.py             # Build vector index
-│   └── build_baci_trade.py        # BACI trade aggregation (dual EU representation)
+│   ├── process_sample.py               # Process sample cases
+│   ├── process_all.py                  # Process all 626 cases
+│   ├── build_index.py                  # Build vector index
+│   ├── build_baci_trade.py             # BACI trade aggregation (dual EU representation)
+│   └── build_dyadic_datasets.py        # Merge ATOP + DESTA + WTO filter
 ├── Output/
-│   ├── sample/                    # Sample outputs (CSV, JSONL, manifests)
-│   └── full/                      # Full run outputs
-├── wto_document_processor.py      # Legacy monolithic processor (superseded by utils/)
-├── CLAUDE.md                      # Development guidance
-└── README.md                      # This file
+│   ├── sample/                         # Sample outputs (CSV, JSONL, manifests)
+│   └── full/                           # Full run outputs
+├── Data.md                             # Full data codebook
+├── CLAUDE.md                           # Development guidance
+└── README.md                           # This file
 ```
 
 ## Document Processing Pipeline
@@ -119,12 +126,39 @@ Requires `OPENAI_API_KEY` in `.env` file.
    - Severity compared to similar industry cases
 4. Develop predictive models for dispute outcomes
 
+## Datasets
+
+### Panel Data
+
+| File | Unit | Rows | Cols | Sources |
+|------|------|------|------|---------|
+| `Data/country_meta_1995_2024.csv` | Country-year | 5,880 | 77 | WTO, WDI, WGI, UN Voting, V-Dem, COW NMC, EU/ATOP |
+| `Data/wto_panel_1995_2024.csv` | Country-year | 5,880 | 18 | WTO subset of above |
+| `Data/wto_mem_list.csv` | WTO member | 166 | 5 | WTO official records |
+
+### Dyadic Data
+
+| File | Unit | Rows | Description |
+|------|------|------|-------------|
+| `Data/wto_dyadic.csv` | Case-dyad | 8,145 | WTO dispute country pairs with case metadata |
+| `Data/bilateral_trade_wto.csv` | Directed dyad-year | 545,333 | BACI trade + ATOP alliances + DESTA agreements, WTO-filtered |
+| `Data/bilateral_trade_section_wto.csv` | Directed dyad-year-section | 6,374,486 | Sector-level trade, WTO-filtered |
+| `Data/desta_panel_1995_2025.csv` | Undirected dyad-year | 235,011 | DESTA trade agreement panel |
+
+### WTO Case Data
+
+- **626 cases** (DS1–DS626) with metadata: complainant, respondent, third parties, agreements cited, procedural dates, dispute stage
+- **9,480 PDFs** across 629 folders, processed into 35 document types
+- Coverage: 1995–2024
+
+> See [`Data/Data.md`](Data/Data.md) for the full variable codebook, source citations, and systematic missing data documentation.
+
 ## Environment Setup
 
 ### Python Dependencies
 
 ```bash
-pip install langchain langchain-community langchain-openai chromadb networkx pandas matplotlib selenium pypdf pytesseract pdf2image
+pip install langchain langchain-community langchain-openai chromadb networkx pandas matplotlib selenium pypdf pytesseract pdf2image country_converter
 ```
 
 ### System Dependencies (for OCR)
@@ -147,44 +181,3 @@ Create `.env` file:
 OPENAI_API_KEY=your_key_here
 LANGCHAIN_API_KEY=your_key_here  # optional, for LangSmith tracing
 ```
-
-## Datasets
-
-### WTO Case Data
-
-- **626 cases** (DS1–DS626) with metadata: complainant, respondent, third parties, agreements cited, procedural dates, dispute stage
-- **9,480 PDFs** across 629 folders, processed into 35 document types
-- Coverage: 1995–2024
-
-### Country-Year Analysis Panel (`Data/country_meta_1995_2024.csv`)
-
-A comprehensive country-year panel integrating six major data sources for **196 countries/polities × 30 years (1995–2024)** = 5,880 observations and 77 variables.
-
-| Source | Variables | Coverage |
-|--------|-----------|----------|
-| WTO membership & dispute records | `wto_member`, `complainant`, `respondent`, `third_party`, cumulative counts | 1995–2024 |
-| World Development Indicators (WDI) | GDP, GDP per capita, population, trade, FDI, exports, imports, unemployment | 1995–2024 |
-| Worldwide Governance Indicators (WGI) | Voice, stability, efficiency, regulatory quality, rule of law, corruption | 1995–2024 (interpolated for pre-2002 gaps) |
-| UN Voting Ideal Points (Bailey, Strezhnev & Voeten 2017) | `idealpointfp`, `idealpointall`, posterior quantiles | 1995–2024 |
-| V-Dem v15 | Electoral democracy, liberal democracy, regime type, election type | 1995–2024 |
-| COW NMC 6.0 | CINC, military expenditures, military personnel, energy consumption, population | 1995–**2016** only |
-| EU / ATOP alliance data | EU membership, eurozone, alliance obligations | 1995–2024 |
-
-> See [`Data/Data.md`](Data/Data.md) for the full variable codebook, source citations with page references, range/unit details, and systematic missing data documentation.
-
-### Bilateral Trade Datasets
-
-Constructed from BACI HS92 data by `scripts/build_baci_trade.py`. Uses **dual EU representation**: individual EU member states retain their own trade rows (including intra-EU trade) while an `EUN` aggregate captures the EU as a single external trade actor. Includes paired `export_dependence` and `import_dependence` indices measuring asymmetric bilateral trade interdependence.
-
-| File | Unit | Rows |
-|------|------|------|
-| `Data/bilateral_trade_aggregate.csv` | Directed dyad-year | ~1.2M |
-| `Data/bilateral_trade_by_section.csv` | Directed dyad-year-section | ~10M |
-| `Data/baci_to_iso3_mapping.csv` | Reference mapping | ~250 |
-| `Data/eu_membership_1995_2024.csv` | Country-year (28 EU members x 30 years) | 840 |
-
-> See [`Data/Data.md`](Data/Data.md) Sections 6--8 for full column definitions and EU representation details.
-
-### Dyads Dataset (Forthcoming)
-
-A directed country-pair-year panel (`dyads_1995_2024.csv`) capturing bilateral dispute history, UN voting alignment, trade flows, and ATOP alliance obligations. Structure documented in `Data/Data.md`.
