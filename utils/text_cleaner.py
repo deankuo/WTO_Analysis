@@ -385,17 +385,166 @@ class TextCleaner:
         r'<!--.*?-->',
     ]
 
+    # Non-English detection word sets (common function words)
+    _FRENCH_WORDS = frozenset({
+        'le', 'la', 'les', 'des', 'du', 'une', 'un', 'qui', 'que',
+        'dans', 'par', 'pour', 'avec', 'sur', 'sont', 'cette',
+        'ces', 'aux', 'ont', 'nous', 'leur', 'pas', 'mais', 'aussi',
+        'peut', 'soit', 'tous', 'tout', 'ses', 'elle',
+    })
+    _SPANISH_WORDS = frozenset({
+        'el', 'los', 'las', 'del', 'una', 'un', 'que', 'por', 'para',
+        'con', 'como', 'esta', 'este', 'sus', 'pero', 'sin',
+        'entre', 'sobre', 'desde', 'hasta', 'todos', 'puede', 'cada',
+    })
+    _NON_EN_WORDS = _FRENCH_WORDS | _SPANISH_WORDS
+
     @classmethod
-    def clean(cls, text: str) -> str:
+    def clean(cls, text: str, case_title: str = '') -> str:
+        """Clean WTO document text for RAG embeddings.
+
+        Removes: WTO boilerplate headers, RESTRICTED markers, page numbers,
+        footnote blocks, non-English paragraphs, repeated page headers,
+        and punctuation artifacts.
+        """
         if not text:
             return ""
 
         cleaned = text
+
+        # 1. Remove WTO header patterns (org names, codes, dates, etc.)
         for pattern in cls.HEADER_PATTERNS:
             cleaned = re.sub(pattern, '', cleaned, flags=re.DOTALL | re.IGNORECASE | re.MULTILINE)
 
+        # 2. Remove RESTRICTED keyword (standalone on a line)
+        cleaned = re.sub(r'^\s*RESTRICTED\s*$', '', cleaned, flags=re.MULTILINE)
+
+        # 3. Remove language markers (anglais, inglés)
+        cleaned = re.sub(r'^\s*\(?\s*(?:anglais|ingles|inglés)\s*\)?\s*$', '',
+                         cleaned, flags=re.MULTILINE | re.IGNORECASE)
+
+        # 4. Remove page number artifacts
+        cleaned = cls._remove_page_numbers(cleaned)
+
+        # 5. Remove footnote blocks (underscore separator + numbered text)
+        cleaned = cls._remove_footnotes(cleaned)
+
+        # 6. Remove non-English paragraphs (French/Spanish)
+        cleaned = cls._remove_non_english(cleaned)
+
+        # 7. Remove repeated case title headers (appear on each page)
+        if case_title:
+            cleaned = cls._remove_repeated_headers(cleaned, case_title)
+
+        # 8. Remove punctuation noise lines
+        cleaned = cls._remove_punctuation_noise(cleaned)
+
+        # 9. Final whitespace cleanup
         cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
         cleaned = re.sub(r'[ \t]+', ' ', cleaned)
         cleaned = re.sub(r' +\n', '\n', cleaned)
         cleaned = cleaned.strip()
+
         return cleaned
+
+    @staticmethod
+    def _remove_page_numbers(text: str) -> str:
+        """Remove page number artifacts from PDF extraction."""
+        # "Page N" or "Page A-N" style
+        text = re.sub(r'^\s*Page\s+[A-Z]?-?\d+\s*$', '', text, flags=re.MULTILINE | re.IGNORECASE)
+        # Centered "- N -" page numbers
+        text = re.sub(r'^\s*-\s*\d+\s*-\s*$', '', text, flags=re.MULTILINE)
+        return text
+
+    @staticmethod
+    def _remove_footnotes(text: str) -> str:
+        """Remove footnote blocks demarcated by underscore separators.
+
+        WTO PDFs have footnotes at page bottoms separated by an underscore
+        line (___), followed by numbered footnote text (e.g., "1 See ...").
+        Multi-line footnotes are handled by continuing to skip lines after
+        a footnote number until the next footnote number or blank line.
+        """
+        lines = text.split('\n')
+        result = []
+        i = 0
+
+        while i < len(lines):
+            stripped = lines[i].strip()
+
+            # Detect footnote separator (3+ underscores)
+            if re.match(r'^_{3,}\s*$', stripped):
+                i += 1
+                saw_footnote = False
+                # Skip footnote content after separator
+                while i < len(lines):
+                    s = lines[i].strip()
+                    if re.match(r'^\d{1,3}[\s.)]', s):
+                        # Numbered footnote line
+                        saw_footnote = True
+                        i += 1
+                    elif saw_footnote and s and not s[0].isupper():
+                        # Continuation of previous footnote (lowercase start)
+                        i += 1
+                    elif not s:
+                        # Blank line: check if more footnotes follow
+                        j = i + 1
+                        while j < len(lines) and not lines[j].strip():
+                            j += 1
+                        if j < len(lines) and re.match(r'^\d{1,3}[\s.)]', lines[j].strip()):
+                            i += 1  # Skip blank between footnotes
+                        else:
+                            break  # End of footnote block
+                    else:
+                        break  # Non-footnote content reached
+                continue
+
+            result.append(lines[i])
+            i += 1
+
+        return '\n'.join(result)
+
+    @classmethod
+    def _remove_non_english(cls, text: str) -> str:
+        """Remove paragraphs that are primarily in French or Spanish.
+
+        Uses word-frequency detection: if >15% of words in a paragraph
+        are common French/Spanish function words, the paragraph is removed.
+        Short paragraphs (<8 words) are kept to avoid false positives.
+        """
+        paragraphs = re.split(r'\n\s*\n', text)
+        kept = []
+        for para in paragraphs:
+            words = re.findall(r'\b[a-zà-ÿ]+\b', para.lower())
+            if len(words) < 8:
+                kept.append(para)
+                continue
+            non_en_count = sum(1 for w in words if w in cls._NON_EN_WORDS)
+            ratio = non_en_count / len(words)
+            if ratio < 0.15:
+                kept.append(para)
+        return '\n\n'.join(kept)
+
+    @staticmethod
+    def _remove_repeated_headers(text: str, case_title: str) -> str:
+        """Remove repeated case title headers that appear on each page."""
+        if not case_title or len(case_title) < 10:
+            return text
+        # Build flexible pattern from case title (allow whitespace variation)
+        escaped = re.escape(case_title)
+        flexible = re.sub(r'\\\s+', r'\\s+', escaped)
+        # Keep the first occurrence, remove all subsequent ones
+        match = re.search(flexible, text, re.IGNORECASE)
+        if match:
+            first_end = match.end()
+            before = text[:first_end]
+            after = re.sub(flexible, '', text[first_end:], flags=re.IGNORECASE)
+            text = before + after
+        return text
+
+    @staticmethod
+    def _remove_punctuation_noise(text: str) -> str:
+        """Remove lines that are primarily punctuation artifacts from PDF extraction."""
+        # Lines that are just punctuation/whitespace (e.g., ". /.", ", ,")
+        text = re.sub(r'^\s*[.,:;/\\|*#@!?(){}\[\]]+\s*$', '', text, flags=re.MULTILINE)
+        return text

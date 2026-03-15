@@ -66,6 +66,65 @@ class FilenameParser:
     def parse(filename: str, folder_name: str) -> FileInfo:
         stem = Path(filename).stem
 
+        # --- Already-renamed DS files: DS{case}_SEQ{nn}_{DocType}[_Variant][_Part].pdf ---
+        ds_match = re.match(r'^DS(\d+)_SEQ(\d+)_(.+)$', stem)
+        if ds_match:
+            case_num = ds_match.group(1)
+            seq_num = int(ds_match.group(2))
+            rest = ds_match.group(3)
+
+            # Parse suffixes from the end of the doc type string
+            part_number = None
+            variant = None
+            variant_number = None
+
+            # Strip trailing two-digit numbers (part number and/or dup index)
+            trailing_nums = []
+            while re.search(r'_(\d{2})$', rest):
+                m = re.search(r'_(\d{2})$', rest)
+                trailing_nums.insert(0, int(m.group(1)))
+                rest = rest[:m.start()]
+
+            # Check for variant suffix (_Add, _Corr, _Rev, _Sup with optional number)
+            var_match = re.search(r'_(Add|Corr|Rev|Sup)(\d*)$', rest)
+            if var_match:
+                variant = var_match.group(1)
+                variant_number = int(var_match.group(2)) if var_match.group(2) else 1
+                rest = rest[:var_match.start()]
+
+            # Assign part number from trailing numbers
+            if trailing_nums:
+                part_number = trailing_nums[0]
+
+            # Infer doc_class from the doc type name
+            doc_class = 'NUMBERED'
+            rest_lower = rest.lower()
+            if 'report_of_panel' in rest_lower:
+                doc_class = 'PANEL_REPORT'
+            elif 'appellate' in rest_lower:
+                doc_class = 'AB_REPORT'
+            elif 'recourse' in rest_lower:
+                doc_class = 'RECOURSE'
+            elif 'arbitration' in rest_lower:
+                doc_class = 'ARBITRATION'
+
+            return FileInfo(
+                original_filename=filename,
+                folder_number=folder_name,
+                file_case_number=case_num,
+                doc_number=seq_num,
+                doc_class=doc_class,
+                variant=variant,
+                variant_number=variant_number,
+                part_number=part_number,
+                is_d_file=False,
+                d_reference=None,
+                sub_number=None,
+                sort_key=(DOC_CLASS_PRIORITY.get(doc_class, 0), seq_num,
+                          0 if not variant else (1 if variant == 'Add' else 2 if variant == 'Corr' else 3),
+                          variant_number or 0, part_number or 0),
+            )
+
         # --- D-files ---
         d_match = re.match(r'^D(\d+)(?:-(\d+))?$', stem)
         if d_match:

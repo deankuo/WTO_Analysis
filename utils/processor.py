@@ -513,7 +513,7 @@ class WTODocumentProcessor:
             if tp_info:
                 self.third_party_joinings.append(tp_info)
 
-            clean_text = TextCleaner.clean(fd['full_text'])
+            clean_text = TextCleaner.clean(fd['full_text'], case_title=fd.get('case_title', ''))
 
             doc = ProcessedDocument(
                 folder_number=folder_name,
