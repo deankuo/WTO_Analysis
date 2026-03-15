@@ -399,47 +399,86 @@ class TextCleaner:
     })
     _NON_EN_WORDS = _FRENCH_WORDS | _SPANISH_WORDS
 
+    # Months for date matching in boilerplate cleanup
+    _MONTHS = r'(?:January|February|March|April|May|June|July|August|September|October|November|December)'
+
     @classmethod
     def clean(cls, text: str, case_title: str = '') -> str:
         """Clean WTO document text for RAG embeddings.
 
         Removes: WTO boilerplate headers, RESTRICTED markers, page numbers,
-        footnote blocks, non-English paragraphs, repeated page headers,
+        footnote blocks, non-English lines, repeated page headers,
         and punctuation artifacts.
+
+        HEADER_PATTERNS are applied only to the first ~2000 chars (header area)
+        to preserve body text references like "World Trade Organization" and
+        inline "WT/DS135/R" citations.
         """
         if not text:
             return ""
 
         cleaned = text
 
-        # 1. Remove WTO header patterns (org names, codes, dates, etc.)
+        # 1. Apply header-removal patterns ONLY to header area (~first 2000 chars)
+        #    This preserves body text like "World Trade Organization"
+        boundary = min(2000, len(cleaned))
+        header = cleaned[:boundary]
+        body = cleaned[boundary:]
         for pattern in cls.HEADER_PATTERNS:
-            cleaned = re.sub(pattern, '', cleaned, flags=re.DOTALL | re.IGNORECASE | re.MULTILINE)
+            header = re.sub(pattern, '', header, flags=re.DOTALL | re.IGNORECASE | re.MULTILINE)
+        cleaned = header + body
 
-        # 2. Remove RESTRICTED keyword (standalone on a line)
+        # 2. Remove RESTRICTED and WTO boilerplate remnants (uppercase-only, safe globally)
         cleaned = re.sub(r'^\s*RESTRICTED\s*$', '', cleaned, flags=re.MULTILINE)
+        # Lines composed entirely of boilerplate words + optional asterisks/punctuation
+        cleaned = re.sub(
+            r'^[ \t]*(?:(?:WORLD\s+TRADE|ORGANIZATION|DISPUTE\s+SETTLEMENT\s+BODY)[ \t*]*)+$',
+            '', cleaned, flags=re.MULTILINE
+        )
+        # "ORGANIZATION" merged with date (from DOTALL line collapsing)
+        cleaned = re.sub(
+            r'^[ \t]*ORGANIZATION\s+\d{1,2}\s+' + cls._MONTHS + r'\s+\d{4}\s*$',
+            '', cleaned, flags=re.MULTILINE
+        )
+        # "ORGANIZATION" prefix before case title (ALL CAPS with dash) — keep the title
+        cleaned = re.sub(
+            r'^([ \t]*)ORGANIZATION\s+(?=[A-Z][A-Z\s\-–])',
+            r'\1', cleaned, flags=re.MULTILINE
+        )
 
-        # 3. Remove language markers (anglais, inglés)
-        cleaned = re.sub(r'^\s*\(?\s*(?:anglais|ingles|inglés)\s*\)?\s*$', '',
+        # 3. Per-page standalone codes (appear as page headers throughout the document)
+        #    Only match when the code is alone on a line — preserves inline body references
+        cleaned = re.sub(r'^\s*WT/DS\d+(?:/[A-Za-z0-9/.\-]*)?\s*$', '', cleaned, flags=re.MULTILINE)
+        cleaned = re.sub(r'^\s*G/[A-Z]+/[A-Za-z0-9/.\-]+\s*$', '', cleaned, flags=re.MULTILINE)
+        cleaned = re.sub(r'^\s*S/L/\d+\s*$', '', cleaned, flags=re.MULTILINE)
+        # Bracketed reference lists: [WT/DS27, WT/DS361, WT/L/625]
+        cleaned = re.sub(
+            r'^\s*\[(?:\s*WT/[\w/]+[,\s]*(?:and\s+)?)+\]\s*$',
+            '', cleaned, flags=re.MULTILINE
+        )
+
+        # 4. Remove language markers (anglais, inglés) and trailing slashes
+        cleaned = re.sub(r'^\s*\(?\s*(?:anglais|ingles|inglés)\s*/?\s*\)?\s*$', '',
                          cleaned, flags=re.MULTILINE | re.IGNORECASE)
+        cleaned = re.sub(r'^\s*/\s*$', '', cleaned, flags=re.MULTILINE)
 
-        # 4. Remove page number artifacts
+        # 5. Remove page number artifacts
         cleaned = cls._remove_page_numbers(cleaned)
 
-        # 5. Remove footnote blocks (underscore separator + numbered text)
+        # 6. Remove footnote blocks (underscore separator + numbered text)
         cleaned = cls._remove_footnotes(cleaned)
 
-        # 6. Remove non-English paragraphs (French/Spanish)
+        # 7. Remove non-English lines (French/Spanish)
         cleaned = cls._remove_non_english(cleaned)
 
-        # 7. Remove repeated case title headers (appear on each page)
+        # 8. Remove repeated case title headers (appear on each page)
         if case_title:
             cleaned = cls._remove_repeated_headers(cleaned, case_title)
 
-        # 8. Remove punctuation noise lines
+        # 9. Remove punctuation noise lines
         cleaned = cls._remove_punctuation_noise(cleaned)
 
-        # 9. Final whitespace cleanup
+        # 10. Final whitespace cleanup
         cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
         cleaned = re.sub(r'[ \t]+', ' ', cleaned)
         cleaned = re.sub(r' +\n', '\n', cleaned)
@@ -506,24 +545,27 @@ class TextCleaner:
 
     @classmethod
     def _remove_non_english(cls, text: str) -> str:
-        """Remove paragraphs that are primarily in French or Spanish.
+        """Remove individual lines that are primarily in French or Spanish.
 
-        Uses word-frequency detection: if >15% of words in a paragraph
-        are common French/Spanish function words, the paragraph is removed.
-        Short paragraphs (<8 words) are kept to avoid false positives.
+        Works line-by-line (not paragraph-by-paragraph) to avoid removing
+        English content in trilingual documents where EN/FR/ES sections
+        appear in the same paragraph without blank-line separators.
+
+        Lines with <5 words are always kept to avoid false positives
+        on short English phrases or section headers.
         """
-        paragraphs = re.split(r'\n\s*\n', text)
+        lines = text.split('\n')
         kept = []
-        for para in paragraphs:
-            words = re.findall(r'\b[a-zà-ÿ]+\b', para.lower())
-            if len(words) < 8:
-                kept.append(para)
+        for line in lines:
+            words = re.findall(r'\b[a-zà-ÿ]+\b', line.lower())
+            if len(words) < 5:
+                kept.append(line)
                 continue
             non_en_count = sum(1 for w in words if w in cls._NON_EN_WORDS)
             ratio = non_en_count / len(words)
-            if ratio < 0.15:
-                kept.append(para)
-        return '\n\n'.join(kept)
+            if ratio < 0.20:
+                kept.append(line)
+        return '\n'.join(kept)
 
     @staticmethod
     def _remove_repeated_headers(text: str, case_title: str) -> str:
@@ -544,7 +586,7 @@ class TextCleaner:
 
     @staticmethod
     def _remove_punctuation_noise(text: str) -> str:
-        """Remove lines that are primarily punctuation artifacts from PDF extraction."""
-        # Lines that are just punctuation/whitespace (e.g., ". /.", ", ,")
-        text = re.sub(r'^\s*[.,:;/\\|*#@!?(){}\[\]]+\s*$', '', text, flags=re.MULTILINE)
+        """Remove lines that are only punctuation and whitespace artifacts."""
+        # Lines composed entirely of punctuation + whitespace (e.g., ". /.", ", ,", "/")
+        text = re.sub(r'^\s*[.,:;/\\|*#@!?(){}\[\]\s]+$', '', text, flags=re.MULTILINE)
         return text
