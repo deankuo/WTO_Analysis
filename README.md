@@ -4,7 +4,7 @@
 
 This project analyzes World Trade Organization (WTO) dispute settlement cases through:
 1. **Social Network Analysis (SNA)**: Mapping relationships between countries in trade disputes
-2. **Document Processing Pipeline**: Renaming, classifying, and extracting text from 9,435 PDFs across 626 cases
+2. **Document Processing Pipeline**: Renaming, classifying, and extracting text from 9,417 PDFs across 626 cases
 3. **RAG System**: Retrieval-augmented generation for LLM-based case severity comparison
 
 **Data Source:** [WTO Dispute Settlement](https://www.wto.org/english/tratop_e/dispu_e/dispu_e.htm)
@@ -22,7 +22,7 @@ WTO/
 │   ├── desta_panel_1995_2025.csv       # DESTA trade agreement panel (235k rows)
 │   └── wto_mem_list.csv                # WTO membership list (166 members)
 ├── WTO_DSB_Cases/
-│   └── [1-629]/                        # PDF documents by case number (9,480 files)
+│   └── [1-626]/                        # PDF documents by case number (9,417 files)
 ├── utils/
 │   ├── filename_parser.py              # WTO filename pattern parsing (20+ patterns)
 │   ├── text_cleaner.py                 # Content extraction & header cleaning
@@ -58,13 +58,19 @@ WTO/
 5. **Generates semantic filenames**: `DS{case}_SEQ{nn}_{DocType}[_Suffix].pdf`
 6. **Outputs**: metadata CSV (no text), JSONL with clean text, rename manifest, third-party joiners, manual review list
 
-### Processing Statistics (Feb 2026)
+### Preprocessing
 
-- **Total documents**: 9,480 PDFs across 626 cases
-- **Successfully classified**: 9,398 (99.1%)
-- **Manual review**: 82 files (78 scanned, 3 non-English, 1 error)
-- **Document types**: 35 consolidated types (from 56)
+- 63 PDFs pre-split on WTO website (2+ hyphens like `8-11-00.pdf`) were manually combined back into single files (folders 8, 99, 302, 457)
+- Text cleaned via 10-step pipeline: header boilerplate removal, footnote removal, non-English line filtering, page number removal, punctuation artifact cleanup — all optimized for RAG embeddings
+
+### Processing Statistics (March 2026)
+
+- **Total documents**: 9,417 PDFs across 626 cases
+- **Successfully classified**: 9,414 (99.97%)
+- **Manual review**: 3 files (non-English cross-references)
+- **Document types**: 42 types
 - **Date coverage**: ~90% (multilingual + inheritance)
+- **Third-party joinings**: 1,036 entries detected
 - **Multi-part documents**: Automatic inheritance working
 
 ### Naming Convention
@@ -148,7 +154,7 @@ Requires `OPENAI_API_KEY` in `.env` file.
 ### WTO Case Data
 
 - **626 cases** (DS1–DS626) with metadata: complainant, respondent, third parties, agreements cited, procedural dates, dispute stage
-- **9,480 PDFs** across 629 folders, processed into 35 document types
+- **9,417 PDFs** across 626 folders, processed into 35 document types
 - Coverage: 1995–2024
 
 > See [`Data/Data.md`](Data/Data.md) for the full variable codebook, source citations, and systematic missing data documentation.

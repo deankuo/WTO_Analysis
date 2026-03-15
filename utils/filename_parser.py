@@ -362,19 +362,29 @@ class FilenameParser:
                            variant='Rev', variant_number=int(m.group(2)),
                            part_number=None, sort_key=(0, int(m.group(1)), 3, int(m.group(2)), 0))
 
-        # ---- Numbered doc with lowercase addendum: -{n}a{m} ----
-        m = re.match(r'^-(\d+)a(\d+)$', suffix, re.IGNORECASE)
+        # ---- Numbered doc with addendum: -{n}A{m} or -{n}A (bare A = addendum 1) ----
+        m = re.match(r'^-(\d+)[Aa](\d+)$', suffix)
         if m:
             return FileInfo(**base, doc_number=int(m.group(1)), doc_class='NUMBERED',
                            variant='Add', variant_number=int(m.group(2)),
                            part_number=None, sort_key=(0, int(m.group(1)), 1, int(m.group(2)), 0))
+        m = re.match(r'^-(\d+)[Aa]$', suffix)
+        if m:
+            return FileInfo(**base, doc_number=int(m.group(1)), doc_class='NUMBERED',
+                           variant='Add', variant_number=1,
+                           part_number=None, sort_key=(0, int(m.group(1)), 1, 1, 0))
 
-        # ---- Numbered doc with corrigendum: -{n}C{m} ----
+        # ---- Numbered doc with corrigendum: -{n}C{m} or -{n}C (bare C = corrigendum 1) ----
         m = re.match(r'^-(\d+)C(\d+)$', suffix)
         if m:
             return FileInfo(**base, doc_number=int(m.group(1)), doc_class='NUMBERED',
                            variant='Corr', variant_number=int(m.group(2)),
                            part_number=None, sort_key=(0, int(m.group(1)), 2, int(m.group(2)), 0))
+        m = re.match(r'^-(\d+)C$', suffix)
+        if m:
+            return FileInfo(**base, doc_number=int(m.group(1)), doc_class='NUMBERED',
+                           variant='Corr', variant_number=1,
+                           part_number=None, sort_key=(0, int(m.group(1)), 2, 1, 0))
 
         # ---- Numbered doc with addendum then corrigendum: -{n}A{m}C{k} ----
         m = re.match(r'^-(\d+)A(\d+)C(\d+)$', suffix)
