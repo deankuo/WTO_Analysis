@@ -7,28 +7,29 @@ embeds into ChromaDB, stores parents in LocalFileStore, builds BM25 index.
 Run ONCE. After completion, stores are read-only during retrieval.
 
 Usage:
-    python ingest.py
-    python ingest.py --label-only   # Only run authoring entity labeling, skip embedding
-    python ingest.py --skip-label   # Skip labeling, assume already done
+    python scripts/ingest.py
+    python scripts/ingest.py --label-only   # Only run authoring entity labeling, skip embedding
+    python scripts/ingest.py --skip-label   # Skip labeling, assume already done
+    python scripts/ingest.py --dry-run      # Chunk + stats, no embedding
 
 Prerequisites:
-    pip install langchain langchain-openai langchain-community chromadb rank-bm25 pandas tqdm pydantic tiktoken
+    pip install langchain-openai langchain-community langchain-classic chromadb rank-bm25 pandas tqdm pydantic tiktoken
     export OPENAI_API_KEY="..."
-    export ANTHROPIC_API_KEY="..."  # Optional, if using Claude for labeling
 """
 
 import os
+import re
+import ast
 import json
 import pickle
 import logging
 import argparse
 import time
 from pathlib import Path
-from typing import List, Dict, Optional, Literal
+from typing import List, Dict, Optional, Literal, Tuple
 from dataclasses import dataclass
 
 import tiktoken
-import pandas as pd
 from tqdm import tqdm
 
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
@@ -41,113 +42,298 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
 # ============================================================
-# Configuration — matches your project structure
+# Configuration
 # ============================================================
 
-# Paths (from your modified spec)
-JSONL_PATH = "Data/WTO/wto_documents_full.jsonl"
-CHROMA_DB_DIR = "stores/chroma_db"
-PARENT_STORE_DIR = "stores/parent_store"
-BM25_INDEX_PATH = "stores/bm25_index.pkl"
-OUTPUT_DIR = "Data"
-LABELED_JSONL_PATH = "Data/WTO/wto_documents_labeled.jsonl"  # After adding authoring_entity
+JSONL_PATH = "./Data/WTO/wto_documents_full.jsonl"
+CHROMA_DB_DIR = "./Data/stores/chroma_db"
+PARENT_STORE_DIR = "./Data/stores/parent_store"
+BM25_INDEX_PATH = "./Data/stores/bm25_index.pkl"
+LABELED_JSONL_PATH = "./Data/WTO/wto_documents_labeled.jsonl"
 
-# Embedding
 EMBEDDING_MODEL = "text-embedding-3-small"
+LABELING_MODEL = "gpt-5-mini"
 
-# LLM for authoring entity labeling
-LABELING_MODEL = "gpt-5-mini"  # Cheap and fast for this simple classification task
+SHORT_DOC_TOKEN_THRESHOLD = 6000
+CHILD_CHUNK_SIZE = 1200
+CHILD_CHUNK_OVERLAP = 200
+PARENT_CHUNK_SIZE = 6000
+PARENT_CHUNK_OVERLAP = 800
 
-# Chunking thresholds
-SHORT_DOC_TOKEN_THRESHOLD = 6000  # ≤ this → no split
-CHILD_CHUNK_SIZE = 1200           # characters (~300 tokens)
-CHILD_CHUNK_OVERLAP = 200         # characters (~50 tokens)
-PARENT_CHUNK_SIZE = 6000          # characters (~1500 tokens)
-PARENT_CHUNK_OVERLAP = 800        # characters (~200 tokens)
-
-# ChromaDB
 CHROMA_COLLECTION_NAME = "wto_child_chunks"
-BATCH_SIZE = 500  # Documents per batch for ChromaDB insertion
+BATCH_SIZE = 500
 
-# Logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
-
-
-# ============================================================
-# JSONL Field Mapping
-# ============================================================
-# Your JSONL has these fields (from the sample you provided):
-#   folder_number, case_number, original_filename, new_filename,
-#   doc_sequence, doc_type, doc_type_raw, doc_class, variant,
-#   part_number, case_title, date, header_codes, agreement_indicators,
-#   complainant, respondent, third_parties, dispute_stage,
-#   agreements_cited, case_summary, page_count, clean_text, processing_date
-
-# We map these to our internal field names:
-FIELD_MAP = {
-    "case_id": "case_number",           # "1", "379", etc.
-    "doc_id": "doc_sequence",           # 1, 2, 3, ...
-    "doc_type": "doc_type",             # "Request_For_Consultations", etc.
-    "doc_type_raw": "doc_type_raw",     # Full descriptive type
-    "title": "case_title",              # "MALAYSIA - PROHIBITION OF IMPORTS..."
-    "text": "clean_text",               # The actual document text
-    "page_count": "page_count",         # Number of pages
-    "source_file": "new_filename",      # e.g., "DS1_SEQ01_Request_For_Consultations.pdf"
-    "date": "date",
-    "complainant": "complainant",
-    "respondent": "respondent",
-    "header_codes": "header_codes",     # e.g., "WT/DS1/1"
-    "agreements_cited": "agreements_cited",
-}
 
 
 # ============================================================
 # Step 0: Authoring Entity Labeling
 # ============================================================
 
+# ---------- Helpers ----------
+
+def _parse_party_list(val) -> List[str]:
+    """Parse '["Country1", "Country2"]' string into list."""
+    if not val or val == '[]':
+        return []
+    try:
+        parsed = ast.literal_eval(val)
+        return [str(x) for x in parsed] if isinstance(parsed, list) else [str(parsed)]
+    except Exception:
+        return [str(val)]
+
+
+# Common WTO country name aliases (normalized form → canonical)
+_ALIASES = {
+    'u.s.': 'united states', 'us': 'united states', 'usa': 'united states',
+    'ec': 'european communities', 'eu': 'european union',
+    'uk': 'united kingdom',
+    'korea': 'korea, republic of', 'south korea': 'korea, republic of',
+    'dominican': 'dominican republic',
+    'chinese taipei': 'separate customs territory of taiwan',
+    'hong kong': 'hong kong, china',
+    'viet nam': 'vietnam',
+}
+
+
+def _normalize(name: str) -> str:
+    """Normalize a country/entity name for matching."""
+    n = name.strip().lower()
+    n = re.sub(r'^the\s+', '', n)
+    n = re.sub(r'[,;:!*]+$', '', n)  # Don't strip periods (part of abbreviations like U.S.)
+    n = n.strip()
+    return n
+
+
+def _resolve_alias(name: str) -> str:
+    """Resolve a normalized name through aliases, trying multiple forms."""
+    # Try exact match first
+    if name in _ALIASES:
+        return _ALIASES[name]
+    # Try without trailing period (U.S. → u.s → u.s.)
+    stripped = name.rstrip('.')
+    if stripped in _ALIASES:
+        return _ALIASES[stripped]
+    # Try with trailing period
+    dotted = name + '.'
+    if dotted in _ALIASES:
+        return _ALIASES[dotted]
+    return name
+
+
+def _name_matches(extracted: str, known: str) -> bool:
+    """Check if an extracted name matches a known party name."""
+    ext = _normalize(extracted)
+    kn = _normalize(known)
+    if not ext or not kn:
+        return False
+
+    # Direct match
+    if ext == kn:
+        return True
+
+    # Alias resolution
+    ext_a = _resolve_alias(ext)
+    kn_a = _resolve_alias(kn)
+    if ext_a == kn_a:
+        return True
+
+    # Containment (both directions, min length 3 to avoid false matches)
+    if len(ext_a) >= 3 and len(kn_a) >= 3:
+        if ext_a in kn_a or kn_a in ext_a:
+            return True
+    return False
+
+
+def _match_party(
+    entity_name: str,
+    complainants: List[str],
+    respondents: List[str],
+    third_parties: List[str],
+) -> Tuple[str, str]:
+    """Match an extracted entity name against known case parties.
+
+    Returns (entity_type, matched_name).
+    """
+    # Check institutional entities first
+    lower = _normalize(entity_name)
+    if any(kw in lower for kw in ['chairman of the panel', 'chairperson of the panel', 'panel']):
+        return 'panel', 'Panel'
+    if 'appellate body' in lower or 'appellate division' in lower:
+        return 'appellate_body', 'Appellate Body'
+    if any(kw in lower for kw in ['arbitrator', 'arbitrators']):
+        return 'arbitrator', 'Arbitrator'
+    if any(kw in lower for kw in ['secretariat', 'director-general', 'director general',
+                                   'chairman of the dsb', 'chairperson of the dsb',
+                                   'chairman of the dispute settlement body',
+                                   'chairperson of the dispute settlement body']):
+        return 'secretariat', 'Secretariat'
+
+    # Check against case parties
+    for c in complainants:
+        if _name_matches(entity_name, c):
+            return 'complainant', c
+    for r in respondents:
+        if _name_matches(entity_name, r):
+            return 'respondent', r
+    for tp in third_parties:
+        if _name_matches(entity_name, tp):
+            return 'third_party', tp
+
+    # Unresolved country name — likely a third party not in the metadata
+    # (can happen when the third_parties field is incomplete)
+    cleaned = re.sub(r'^the\s+', '', entity_name.strip(), flags=re.IGNORECASE)
+    cleaned = re.sub(r'[.,;:]+$', '', cleaned).strip()
+    if cleaned and len(cleaned) > 2:
+        return 'third_party', cleaned
+
+    return 'unknown', entity_name
+
+
+# ---------- Entity extraction from text ----------
+
+# Regex: capture entity name after "by" or "from", stop at common WTO delimiters
+_ENTITY_BOUNDARY = (
+    r'(?=\s*(?:'
+    r'Addendum|Corrigendum|Revision|Supplement|Annex|'
+    r'under\s+(?:Article|paragraph|the\s+Understanding|the\s+DSU)|'
+    r'pursuant|The\s+following|This\s+communication|'
+    r'Thefollowing|$|\n|\r'
+    r'))'
+)
+
+_BY_FROM_RE = re.compile(
+    r'\b(?:Communication\s+)?(?:by|from)\s+'
+    r'((?:the\s+)?(?:Permanent\s+Mission\s+of\s+)?'
+    r'.+?)'
+    + _ENTITY_BOUNDARY,
+    re.IGNORECASE | re.DOTALL
+)
+
+# Specific pattern: "from the Permanent Mission of [Country] to the"
+_PERM_MISSION_RE = re.compile(
+    r'from\s+the\s+Permanent\s+Mission\s+of\s+(.+?)\s+to\s+the',
+    re.IGNORECASE
+)
+
+# "Submissions of [Country]" pattern for Submission type
+_SUBMISSIONS_OF_RE = re.compile(
+    r'submissions?\s+of\s+((?:the\s+)?.+?)(?:\s+Contents|\s+Page|\n|$)',
+    re.IGNORECASE
+)
+
+
+def _extract_entity_from_text(text: str, max_chars: int = 500) -> Optional[str]:
+    """Extract authoring entity name from document text.
+
+    Looks for 'by [Entity]' or 'from [Entity]' in the first max_chars.
+    Returns the extracted entity name, or None.
+    """
+    if not text:
+        return None
+    snippet = text[:max_chars]
+
+    # Try Permanent Mission pattern first (most specific)
+    m = _PERM_MISSION_RE.search(snippet)
+    if m:
+        name = m.group(1).strip()
+        name = re.sub(r'[.,;:]+$', '', name).strip()
+        if len(name) > 2:
+            return name
+
+    # Try general by/from pattern
+    m = _BY_FROM_RE.search(snippet)
+    if m:
+        name = m.group(1).strip()
+        # Strip "the Permanent Mission of" prefix if present
+        name = re.sub(r'^the\s+Permanent\s+Mission\s+of\s+', '', name, flags=re.IGNORECASE)
+        name = re.sub(r'[.,;:]+$', '', name).strip()
+        if len(name) > 2:
+            return name
+
+    return None
+
+
+# ---------- Rule-based entity classification ----------
+
+# doc_type → (entity_type, entity_name_or_None)
+# None means entity_type is known but name must come from case metadata
+# Full None value means doc_type alone is ambiguous → need text analysis
+DOC_TYPE_ENTITY_RULES = {
+    # Complainant
+    'Request_For_Consultations': ('complainant', None),
+    'Request_For_Establishment_Of_Panel': ('complainant', None),
+    'Request_Regarding_Consultations': ('complainant', None),
+    'Request_To_Reactivate_Consultations': ('complainant', None),
+
+    # Third party (name from text)
+    'Request_To_Join_Consultations': ('third_party', None),
+
+    # Panel
+    'Report_Of_Panel': ('panel', 'Panel'),
+    'Working_Procedures': ('panel', 'Panel'),
+    'Questions_And_Replies': ('panel', 'Panel'),
+    'Interim_Review': ('panel', 'Panel'),
+    'Terms_Of_Reference': ('panel', 'Panel'),
+
+    # Appellate Body
+    'Report_Of_Appellate_Body': ('appellate_body', 'Appellate Body'),
+    'Appellate_Body_Report_And_Panel_Report': ('appellate_body', 'Appellate Body'),
+
+    # Arbitrator
+    'Arbitration_Award': ('arbitrator', 'Arbitrator'),
+    'Appointment_Of_Arbitrator': ('secretariat', 'Secretariat'),
+
+    # Secretariat
+    'Note_By_Secretariat': ('secretariat', 'Secretariat'),
+    'Cancelled_Document': ('secretariat', 'Secretariat'),
+    'DSB_Action': ('secretariat', 'Secretariat'),
+    'Panel_Composition': ('secretariat', 'Secretariat'),
+    'Extension_Of_Time_Period': ('secretariat', 'Secretariat'),
+
+    # Joint / agreed
+    'Notification_Of_Mutually_Agreed_Solution': ('joint', None),
+    'Understanding': ('joint', None),
+    'Agreed_Procedures': ('joint', None),
+    'Agreement_Art_21_3': ('joint', None),
+    'Notification_Of_Agreement': ('joint', None),
+
+    # Secretariat corrections
+    'Corrigendum': ('secretariat', 'Secretariat'),
+    'Modification': ('secretariat', 'Secretariat'),
+
+    # Need text analysis (set to None)
+    'Communication': None,
+    'Status_Report': None,
+    'Notification_Of_Appeal': None,
+    'Recourse': None,
+    'Addendum': None,
+    'Request_For_Decision': None,
+    'Submission': None,
+    'Executive_Summary': None,
+    'Request_For_Arbitration': None,
+    'Arbitration': None,
+    'Surveillance_Of_Implementation': None,
+    'Implementation_Report': None,
+    'Report_By_Director_General': ('secretariat', 'Secretariat'),
+    'Statement': None,
+    'Transcript': ('panel', 'Panel'),
+}
+
+
 class AuthoringEntity(BaseModel):
-    """Structured output for document authoring entity classification."""
+    """Structured output for LLM-based entity classification."""
     entity_type: Literal[
-        "complainant",
-        "respondent",
-        "third_party",
-        "panel",
-        "appellate_body",
-        "arbitrator",
-        "secretariat",
-        "joint",
-        "unknown"
-    ] = Field(
-        description="The type of entity that authored this document."
-    )
+        "complainant", "respondent", "third_party",
+        "panel", "appellate_body", "arbitrator",
+        "secretariat", "joint", "unknown"
+    ] = Field(description="The type of entity that authored this document.")
     entity_name: str = Field(
         description="The specific name of the authoring entity. "
         "For countries, use the country name. "
-        "For panel/AB/secretariat, use 'Panel', 'Appellate Body', 'Secretariat'. "
-        "For joint documents, list all parties."
+        "For panel/AB/secretariat, use 'Panel', 'Appellate Body', 'Secretariat'."
     )
-    confidence: Literal["high", "medium", "low"] = Field(
-        description="Confidence in the classification."
-    )
-
-
-# Many doc types can be classified by rules alone, no LLM needed
-DOC_TYPE_TO_ENTITY_RULES = {
-    "Request_For_Consultations": "complainant",
-    "Panel_Report": "panel",
-    "Appellate_Body_Report": "appellate_body",
-    "Arbitration_Award": "arbitrator",
-    "Communication_From_Director_General": "secretariat",
-    "Constitution_Of_The_Panel": "secretariat",
-    "Working_Procedures": "panel",
-    "Notification_Of_Mutually_Agreed_Solution": "joint",
-    "Notification_Of_Appeal": None,      # Could be either party → needs LLM or doc_type_raw
-    "Third_Party_Submission": "third_party",
-}
 
 
 def label_authoring_entities(
@@ -155,150 +341,171 @@ def label_authoring_entities(
     output_path: str = LABELED_JSONL_PATH,
     max_records: int = 0,
 ):
-    """
-    Add authoring_entity and authoring_entity_name fields to each document.
-    Uses rule-based classification first, falls back to LLM for ambiguous cases.
+    """Add authoring_entity and authoring_entity_name fields to each document.
+
+    Pipeline:
+      1. Rule-based from doc_type (covers ~45% of docs unambiguously)
+      2. Extract entity from doc_type_raw using by/from patterns
+      3. Extract entity from first 500 chars of clean_text
+      4. Match extracted name against complainant/respondent/third_parties
+      5. LLM fallback for truly ambiguous cases
     """
     logger.info(f"Labeling authoring entities from {input_path}")
-
-    # Load LLM for ambiguous cases
-    llm = ChatOpenAI(model=LABELING_MODEL, temperature=0)
-    structured_llm = llm.with_structured_output(AuthoringEntity)
-
-    labeling_prompt = ChatPromptTemplate.from_messages([
-        ("system", """Classify who authored this WTO dispute document. 
-Options: complainant, respondent, third_party, panel, appellate_body, arbitrator, secretariat, joint, unknown.
-Use the document type, header codes, and the first 500 characters of text to determine the author."""),
-        ("human", """Case: DS{case_id} — {case_title}
-Complainant: {complainant}
-Respondent: {respondent}
-Document type: {doc_type_raw}
-Header codes: {header_codes}
-First 500 chars of text:
-{text_preview}
-
-Who authored this document?"""),
-    ])
 
     records = []
     with open(input_path, "r", encoding="utf-8") as f:
         for line in f:
-            records.append(json.loads(line.strip()))
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
 
     if max_records > 0:
         records = records[:max_records]
         logger.info(f"Test mode: labeling only {max_records} documents")
 
-    logger.info(f"Loaded {len(records)} documents")
+    logger.info(f"Loaded {len(records)} documents (after dedup)")
 
-    llm_call_count = 0
-    rule_count = 0
+    # LLM setup (lazy — only initialized if needed)
+    llm = None
+    labeling_prompt = ChatPromptTemplate.from_messages([
+        ("system", (
+            "Classify who authored this WTO dispute document.\n"
+            "Options: complainant, respondent, third_party, panel, "
+            "appellate_body, arbitrator, secretariat, joint, unknown.\n"
+            "Return the entity_type and the specific entity_name."
+        )),
+        ("human", (
+            "Case: DS{case_id} — {case_title}\n"
+            "Complainant: {complainant}\n"
+            "Respondent: {respondent}\n"
+            "Third parties: {third_parties}\n"
+            "Document type: {doc_type} (raw: {doc_type_raw})\n"
+            "Header codes: {header_codes}\n"
+            "First 500 chars of text:\n{text_preview}\n\n"
+            "Who authored this document?"
+        )),
+    ])
+
+    stats = {'rule': 0, 'raw_extract': 0, 'text_extract': 0, 'llm': 0, 'unknown': 0}
 
     with open(output_path, "w", encoding="utf-8") as out_f:
-        for rec in tqdm(records, desc="Labeling authoring entities"):
+        for rec in tqdm(records, desc="Labeling"):
             doc_type = rec.get("doc_type", "")
             doc_type_raw = rec.get("doc_type_raw", "")
-            complainant = rec.get("complainant", "[]")
-            respondent = rec.get("respondent", "[]")
+            clean_text = rec.get("clean_text", "")
+            complainants = _parse_party_list(rec.get("complainant", "[]"))
+            respondents = _parse_party_list(rec.get("respondent", "[]"))
+            third_parties = _parse_party_list(rec.get("third_parties", "[]"))
 
-            # Try rule-based classification first
-            rule_entity = DOC_TYPE_TO_ENTITY_RULES.get(doc_type)
+            entity_type = None
+            entity_name = None
+            confidence = "low"
 
-            if rule_entity is not None:
-                # Resolve "complainant"/"respondent" to actual country names
-                if rule_entity == "complainant":
-                    entity_name = complainant
-                elif rule_entity == "respondent":
-                    entity_name = respondent
-                elif rule_entity == "joint":
-                    entity_name = f"{complainant} & {respondent}"
-                else:
-                    entity_name = rule_entity.replace("_", " ").title()
+            # ---- Step 1: Rule-based from doc_type ----
+            rule = DOC_TYPE_ENTITY_RULES.get(doc_type)
+            if rule is not None:
+                entity_type, entity_name = rule
 
-                rec["authoring_entity"] = rule_entity
-                rec["authoring_entity_name"] = entity_name
-                rec["authoring_entity_confidence"] = "high"
-                rule_count += 1
-
-            else:
-                # Fallback: use doc_type_raw to try rule-based
-                raw_lower = doc_type_raw.lower()
-
-                # Heuristic rules on doc_type_raw
-                if "by " in raw_lower:
-                    # e.g., "Request for Consultations under Article XXIII:1 by Singapore"
-                    # The country after "by" is the author
-                    after_by = doc_type_raw.split("by ")[-1].strip()
-                    if any(c in after_by for c in eval(complainant) if isinstance(eval(complainant), list)):
-                        rec["authoring_entity"] = "complainant"
-                        rec["authoring_entity_name"] = after_by
-                        rec["authoring_entity_confidence"] = "medium"
-                        rule_count += 1
-                    elif any(c in after_by for c in eval(respondent) if isinstance(eval(respondent), list)):
-                        rec["authoring_entity"] = "respondent"
-                        rec["authoring_entity_name"] = after_by
-                        rec["authoring_entity_confidence"] = "medium"
-                        rule_count += 1
+                # Resolve placeholder names
+                if entity_type == 'complainant' and entity_name is None:
+                    entity_name = ', '.join(complainants) if complainants else 'Complainant'
+                elif entity_type == 'respondent' and entity_name is None:
+                    entity_name = ', '.join(respondents) if respondents else 'Respondent'
+                elif entity_type == 'joint' and entity_name is None:
+                    entity_name = f"{', '.join(complainants)} & {', '.join(respondents)}"
+                elif entity_type == 'third_party' and entity_name is None:
+                    # For Request_To_Join_Consultations: extract name from text
+                    extracted = _extract_entity_from_text(doc_type_raw) or _extract_entity_from_text(clean_text)
+                    if extracted:
+                        _, matched = _match_party(extracted, complainants, respondents, third_parties)
+                        entity_name = matched
                     else:
-                        # "by" some third party or unknown
-                        rec["authoring_entity"] = "third_party"
-                        rec["authoring_entity_name"] = after_by
-                        rec["authoring_entity_confidence"] = "medium"
-                        rule_count += 1
+                        entity_name = 'Third Party'
 
-                elif "panel" in raw_lower and "report" in raw_lower:
-                    rec["authoring_entity"] = "panel"
-                    rec["authoring_entity_name"] = "Panel"
-                    rec["authoring_entity_confidence"] = "high"
-                    rule_count += 1
+                confidence = "high"
+                stats['rule'] += 1
 
-                elif "appellate" in raw_lower:
-                    rec["authoring_entity"] = "appellate_body"
-                    rec["authoring_entity_name"] = "Appellate Body"
-                    rec["authoring_entity_confidence"] = "high"
-                    rule_count += 1
+            # ---- Step 2: Extract from doc_type_raw ----
+            if entity_type is None:
+                extracted = _extract_entity_from_text(doc_type_raw)
+                if extracted:
+                    entity_type, entity_name = _match_party(
+                        extracted, complainants, respondents, third_parties
+                    )
+                    confidence = "high" if entity_type != 'unknown' else "medium"
+                    stats['raw_extract'] += 1
 
-                elif "arbitrat" in raw_lower:
-                    rec["authoring_entity"] = "arbitrator"
-                    rec["authoring_entity_name"] = "Arbitrator"
-                    rec["authoring_entity_confidence"] = "high"
-                    rule_count += 1
+            # ---- Step 3: Extract from first 500 chars of clean_text ----
+            if entity_type is None:
+                extracted = _extract_entity_from_text(clean_text, max_chars=500)
+                if extracted:
+                    entity_type, entity_name = _match_party(
+                        extracted, complainants, respondents, third_parties
+                    )
+                    confidence = "medium"
+                    stats['text_extract'] += 1
 
-                else:
-                    # Truly ambiguous → use LLM
-                    try:
-                        text_preview = rec.get("clean_text", "")[:500]
-                        result = structured_llm.invoke(
-                            labeling_prompt.format_messages(
-                                case_id=rec.get("case_number", ""),
-                                case_title=rec.get("case_title", ""),
-                                complainant=complainant,
-                                respondent=respondent,
-                                doc_type_raw=doc_type_raw,
-                                header_codes=rec.get("header_codes", ""),
-                                text_preview=text_preview,
-                            )
+            # ---- Step 4: Addendum/Submission/Executive_Summary heuristic ----
+            if entity_type is None and doc_type in ('Addendum', 'Executive_Summary', 'Submission'):
+                # Try "Submissions of [Country]" pattern for Executive_Summary
+                m = _SUBMISSIONS_OF_RE.search(doc_type_raw) or _SUBMISSIONS_OF_RE.search(clean_text[:500])
+                if m:
+                    extracted_name = m.group(1).strip()
+                    extracted_name = re.sub(r'[.,;:]+$', '', extracted_name)
+                    if 'third part' in extracted_name.lower():
+                        entity_type, entity_name = 'third_party', 'Third Parties'
+                    else:
+                        entity_type, entity_name = _match_party(
+                            extracted_name, complainants, respondents, third_parties
                         )
-                        rec["authoring_entity"] = result.entity_type
-                        rec["authoring_entity_name"] = result.entity_name
-                        rec["authoring_entity_confidence"] = result.confidence
-                        llm_call_count += 1
+                    confidence = "medium"
+                    stats['text_extract'] += 1
 
-                        # Rate limit
-                        if llm_call_count % 50 == 0:
-                            time.sleep(1)
+            # ---- Step 5: LLM fallback ----
+            if entity_type is None:
+                try:
+                    if llm is None:
+                        llm = ChatOpenAI(model=LABELING_MODEL, temperature=0)
+                        llm = llm.with_structured_output(AuthoringEntity)
 
-                    except Exception as e:
-                        logger.warning(f"LLM labeling failed for {rec.get('new_filename', '')}: {e}")
-                        rec["authoring_entity"] = "unknown"
-                        rec["authoring_entity_name"] = "Unknown"
-                        rec["authoring_entity_confidence"] = "low"
+                    text_preview = clean_text[:500] if clean_text else "(no text)"
+                    result = llm.invoke(
+                        labeling_prompt.format_messages(
+                            case_id=rec.get("case_number", ""),
+                            case_title=rec.get("case_title", ""),
+                            complainant=', '.join(complainants),
+                            respondent=', '.join(respondents),
+                            third_parties=', '.join(third_parties),
+                            doc_type=doc_type,
+                            doc_type_raw=doc_type_raw[:200],
+                            header_codes=rec.get("header_codes", ""),
+                            text_preview=text_preview,
+                        )
+                    )
+                    entity_type = result.entity_type
+                    entity_name = result.entity_name
+                    confidence = "medium"
+                    stats['llm'] += 1
+
+                    if stats['llm'] % 50 == 0:
+                        time.sleep(1)
+
+                except Exception as e:
+                    logger.warning(f"LLM failed for {rec.get('new_filename', '')}: {e}")
+                    entity_type = "unknown"
+                    entity_name = "Unknown"
+                    confidence = "low"
+                    stats['unknown'] += 1
+
+            rec["authoring_entity"] = entity_type
+            rec["authoring_entity_name"] = entity_name
+            rec["authoring_entity_confidence"] = confidence
 
             out_f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
     logger.info(
-        f"Labeling complete. Rule-based: {rule_count}, LLM: {llm_call_count}, "
-        f"Total: {rule_count + llm_call_count}"
+        f"Labeling complete. Rule: {stats['rule']}, Raw extract: {stats['raw_extract']}, "
+        f"Text extract: {stats['text_extract']}, LLM: {stats['llm']}, Unknown: {stats['unknown']}"
     )
     logger.info(f"Saved labeled JSONL to {output_path}")
 
@@ -307,13 +514,16 @@ Who authored this document?"""),
 # Step 1: Token Counting
 # ============================================================
 
-def count_tokens(text: str, model: str = "cl100k_base") -> int:
-    """Count tokens using tiktoken (OpenAI tokenizer)."""
+_ENCODING = None
+
+def count_tokens(text: str) -> int:
+    """Count tokens using tiktoken (cl100k_base for OpenAI models)."""
+    global _ENCODING
+    if _ENCODING is None:
+        _ENCODING = tiktoken.get_encoding("cl100k_base")
     try:
-        enc = tiktoken.get_encoding(model)
-        return len(enc.encode(text))
+        return len(_ENCODING.encode(text))
     except Exception:
-        # Fallback: rough estimate
         return int(len(text.split()) * 1.3)
 
 
@@ -324,20 +534,21 @@ def count_tokens(text: str, model: str = "cl100k_base") -> int:
 def create_chunks(
     records: List[Dict],
 ) -> tuple[List[Document], Dict[str, Dict]]:
-    """
-    Process all documents into child chunks and parent chunks.
+    """Process documents into child chunks + parent chunks.
+
+    Short docs (≤ SHORT_DOC_TOKEN_THRESHOLD tokens): stored as-is (child = parent).
+    Long docs: split into parent chunks, then child chunks within each parent.
 
     Returns:
-        child_docs: List[Document] — all child chunks with metadata (for ChromaDB + BM25)
-        parent_map: Dict[parent_id, {"text": str, "metadata": dict}] — parent chunks (for LocalFileStore)
+        child_docs: List[Document] for ChromaDB + BM25
+        parent_map: Dict[parent_id → {"text": str, "metadata": dict}] for LocalFileStore
     """
     child_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHILD_CHUNK_SIZE,
         chunk_overlap=CHILD_CHUNK_OVERLAP,
-        length_function=len,  # Character-based
+        length_function=len,
         separators=["\n\n", "\n", ". ", " ", ""],
     )
-
     parent_splitter = RecursiveCharacterTextSplitter(
         chunk_size=PARENT_CHUNK_SIZE,
         chunk_overlap=PARENT_CHUNK_OVERLAP,
@@ -347,7 +558,6 @@ def create_chunks(
 
     child_docs = []
     parent_map = {}
-
     stats = {"short": 0, "long": 0, "empty": 0}
 
     for rec in tqdm(records, desc="Chunking documents"):
@@ -357,10 +567,10 @@ def create_chunks(
             continue
 
         case_id = str(rec.get("case_number", ""))
+        folder = str(rec.get("folder_number", ""))
         doc_seq = str(rec.get("doc_sequence", ""))
-        doc_id = f"DS{case_id}_SEQ{doc_seq.zfill(2)}"
+        doc_id = f"F{folder}_DS{case_id}_SEQ{doc_seq.zfill(2)}"
 
-        # Common metadata for this document
         base_metadata = {
             "case_id": case_id,
             "doc_id": doc_id,
@@ -381,29 +591,18 @@ def create_chunks(
         if token_count <= SHORT_DOC_TOKEN_THRESHOLD:
             # ---- SHORT DOCUMENT: No split ----
             stats["short"] += 1
-
             chunk_id = f"{doc_id}_full"
-            parent_id = chunk_id  # Same as child
 
             metadata = {
                 **base_metadata,
-                "parent_id": parent_id,
+                "parent_id": chunk_id,
                 "is_chunked": False,
                 "chunk_index": 0,
                 "token_count": token_count,
             }
 
-            # Child doc (for ChromaDB + BM25)
-            child_docs.append(Document(
-                page_content=text,
-                metadata=metadata,
-            ))
-
-            # Parent (same content, stored in LocalFileStore)
-            parent_map[parent_id] = {
-                "text": text,
-                "metadata": metadata,
-            }
+            child_docs.append(Document(page_content=text, metadata=metadata))
+            parent_map[chunk_id] = {"text": text, "metadata": metadata}
 
         else:
             # ---- LONG DOCUMENT: Parent/Child split ----
@@ -412,16 +611,15 @@ def create_chunks(
             # Create parent chunks
             parent_texts = parent_splitter.split_text(text)
             parent_entries = []
-            parent_char_ranges = []
 
             search_start = 0
             for i, pt in enumerate(parent_texts):
                 p_id = f"{doc_id}_parent_{i:03d}"
-                p_start = text.find(pt[:100], search_start)  # Find approximate position
+                p_start = text.find(pt[:100], search_start)
                 if p_start == -1:
                     p_start = search_start
                 p_end = p_start + len(pt)
-                search_start = max(search_start, p_start + len(pt) // 2)  # Move forward
+                search_start = max(search_start, p_start + len(pt) // 2)
 
                 p_metadata = {
                     **base_metadata,
@@ -431,29 +629,21 @@ def create_chunks(
                     "token_count": count_tokens(pt),
                 }
 
-                parent_map[p_id] = {
-                    "text": pt,
-                    "metadata": p_metadata,
-                }
-
+                parent_map[p_id] = {"text": pt, "metadata": p_metadata}
                 parent_entries.append((p_id, p_start, p_end))
-                parent_char_ranges.append((p_start, p_end, p_id))
 
             # Create child chunks
             child_texts = child_splitter.split_text(text)
-
             child_search_start = 0
-            for j, ct in enumerate(child_texts):
-                c_id = f"{doc_id}_child_{j:04d}"
 
-                # Find this child's position in the original text
+            for j, ct in enumerate(child_texts):
                 c_start = text.find(ct[:80], child_search_start)
                 if c_start == -1:
                     c_start = child_search_start
                 child_search_start = max(child_search_start, c_start + len(ct) // 2)
 
-                # Determine which parent this child belongs to
-                assigned_parent_id = parent_entries[-1][0]  # Default to last parent
+                # Determine parent
+                assigned_parent_id = parent_entries[-1][0]
                 for p_id, p_start, p_end in parent_entries:
                     if p_start <= c_start < p_end:
                         assigned_parent_id = p_id
@@ -467,17 +657,13 @@ def create_chunks(
                     "token_count": count_tokens(ct),
                 }
 
-                child_docs.append(Document(
-                    page_content=ct,
-                    metadata=c_metadata,
-                ))
+                child_docs.append(Document(page_content=ct, metadata=c_metadata))
 
     logger.info(
-        f"Chunking complete. Short docs: {stats['short']}, Long docs: {stats['long']}, "
+        f"Chunking complete. Short: {stats['short']}, Long: {stats['long']}, "
         f"Empty/skipped: {stats['empty']}"
     )
-    logger.info(f"Total child chunks: {len(child_docs)}, Total parent entries: {len(parent_map)}")
-
+    logger.info(f"Total child chunks: {len(child_docs)}, Total parents: {len(parent_map)}")
     return child_docs, parent_map
 
 
@@ -493,8 +679,6 @@ def build_chroma_store(
     logger.info(f"Building ChromaDB at {persist_dir} with {len(child_docs)} child chunks...")
 
     embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)
-
-    # Process in batches
     vectorstore = None
     total_batches = (len(child_docs) + BATCH_SIZE - 1) // BATCH_SIZE
 
@@ -503,7 +687,6 @@ def build_chroma_store(
         end = min(start + BATCH_SIZE, len(child_docs))
         batch = child_docs[start:end]
 
-        # Generate unique IDs for each chunk
         ids = []
         for doc in batch:
             if doc.metadata.get("is_chunked"):
@@ -511,22 +694,31 @@ def build_chroma_store(
             else:
                 ids.append(f"{doc.metadata['doc_id']}_full")
 
-        if vectorstore is None:
-            vectorstore = Chroma.from_documents(
-                documents=batch,
-                embedding=embeddings,
-                collection_name=CHROMA_COLLECTION_NAME,
-                persist_directory=persist_dir,
-                ids=ids,
-            )
-        else:
-            vectorstore.add_documents(batch, ids=ids)
+        for attempt in range(5):
+            try:
+                if vectorstore is None:
+                    vectorstore = Chroma.from_documents(
+                        documents=batch,
+                        embedding=embeddings,
+                        collection_name=CHROMA_COLLECTION_NAME,
+                        persist_directory=persist_dir,
+                        ids=ids,
+                    )
+                else:
+                    vectorstore.add_documents(batch, ids=ids)
+                break
+            except Exception as e:
+                if "429" in str(e) or "rate_limit" in str(e).lower():
+                    wait = 10 * (attempt + 1)
+                    logger.warning(f"Rate limited (attempt {attempt+1}/5), waiting {wait}s...")
+                    time.sleep(wait)
+                else:
+                    raise
 
-        # Small delay to avoid hitting API rate limits
-        if batch_idx % 10 == 0 and batch_idx > 0:
-            time.sleep(1)
+        # ~100k tokens per batch; 1M TPM limit → pause 6s to stay under limit
+        time.sleep(6)
 
-    logger.info(f"ChromaDB built successfully. Collection: {CHROMA_COLLECTION_NAME}")
+    logger.info(f"ChromaDB built. Collection: {CHROMA_COLLECTION_NAME}")
     return vectorstore
 
 
@@ -534,13 +726,12 @@ def build_parent_store(
     parent_map: Dict[str, Dict],
     store_dir: str = PARENT_STORE_DIR,
 ) -> LocalFileStore:
-    """Store parent chunks in LocalFileStore."""
+    """Store parent chunks in LocalFileStore for retrieval."""
     logger.info(f"Building LocalFileStore at {store_dir} with {len(parent_map)} parent chunks...")
 
     os.makedirs(store_dir, exist_ok=True)
     store = LocalFileStore(root_path=store_dir)
 
-    # Store in batches
     batch = []
     for parent_id, parent_data in tqdm(parent_map.items(), desc="Storing parents"):
         encoded = json.dumps(parent_data, ensure_ascii=False).encode("utf-8")
@@ -550,11 +741,10 @@ def build_parent_store(
             store.mset(batch)
             batch = []
 
-    # Store remaining
     if batch:
         store.mset(batch)
 
-    logger.info("LocalFileStore built successfully.")
+    logger.info("LocalFileStore built.")
     return store
 
 
@@ -566,9 +756,8 @@ def build_bm25_index(
     logger.info(f"Building BM25 index from {len(child_docs)} child chunks...")
 
     bm25_retriever = BM25Retriever.from_documents(child_docs)
-    bm25_retriever.k = 30  # Retrieve more than needed; filter + fuse later
+    bm25_retriever.k = 30
 
-    # Persist
     os.makedirs(os.path.dirname(index_path), exist_ok=True)
     with open(index_path, "wb") as f:
         pickle.dump(bm25_retriever, f)
@@ -578,37 +767,28 @@ def build_bm25_index(
 
 
 # ============================================================
-# Step 4: Summary Statistics
+# Step 4: Summary
 # ============================================================
 
-def print_ingest_summary(
-    child_docs: List[Document],
-    parent_map: Dict[str, Dict],
-):
-    """Print summary statistics after ingest."""
+def print_ingest_summary(child_docs: List[Document], parent_map: Dict[str, Dict]):
+    """Print summary statistics."""
     print("\n" + "=" * 60)
     print("INGEST PIPELINE — SUMMARY")
     print("=" * 60)
 
-    # Document counts
     short_docs = sum(1 for d in child_docs if not d.metadata.get("is_chunked"))
-    long_doc_children = sum(1 for d in child_docs if d.metadata.get("is_chunked"))
-    total_child = len(child_docs)
-    total_parent = len(parent_map)
-
-    print(f"Total child chunks (ChromaDB + BM25):  {total_child:,}")
+    long_children = sum(1 for d in child_docs if d.metadata.get("is_chunked"))
+    print(f"Total child chunks (ChromaDB + BM25):  {len(child_docs):,}")
     print(f"  - From short docs (unsplit):          {short_docs:,}")
-    print(f"  - From long docs (split):             {long_doc_children:,}")
-    print(f"Total parent entries (LocalFileStore):  {total_parent:,}")
+    print(f"  - From long docs (split):             {long_children:,}")
+    print(f"Total parent entries (LocalFileStore):  {len(parent_map):,}")
 
-    # Token distribution
     token_counts = [d.metadata.get("token_count", 0) for d in child_docs]
     if token_counts:
         print(f"\nChild chunk token stats:")
         print(f"  Min: {min(token_counts):,}, Max: {max(token_counts):,}, "
               f"Mean: {sum(token_counts)/len(token_counts):.0f}")
 
-    # Case coverage
     case_ids = set(d.metadata.get("case_id") for d in child_docs)
     print(f"\nUnique cases covered: {len(case_ids)}")
 
@@ -618,8 +798,10 @@ def print_ingest_summary(
         dt = d.metadata.get("doc_type", "unknown")
         doc_types[dt] = doc_types.get(dt, 0) + 1
     print(f"\nDoc type distribution (child chunks):")
-    for dt, count in sorted(doc_types.items(), key=lambda x: -x[1]):
-        print(f"  {dt:40s}: {count:,}")
+    for dt, count in sorted(doc_types.items(), key=lambda x: -x[1])[:20]:
+        print(f"  {dt:45s}: {count:,}")
+    if len(doc_types) > 20:
+        print(f"  ... and {len(doc_types) - 20} more types")
 
     # Authoring entity distribution
     entities = {}
@@ -630,7 +812,7 @@ def print_ingest_summary(
     for ent, count in sorted(entities.items(), key=lambda x: -x[1]):
         print(f"  {ent:20s}: {count:,}")
 
-    # Storage estimates
+    # Storage sizes
     chroma_path = Path(CHROMA_DB_DIR)
     if chroma_path.exists():
         chroma_size = sum(f.stat().st_size for f in chroma_path.rglob("*") if f.is_file())
@@ -656,7 +838,7 @@ def main():
     parser.add_argument("--test", type=int, default=0,
                         help="Test mode: process only N documents")
     parser.add_argument("--dry-run", action="store_true",
-                        help="Dry run: only chunk and print stats, do NOT embed or write stores")
+                        help="Chunk and print stats, do NOT embed or write stores")
     args = parser.parse_args()
 
     # ---- Step 0: Authoring entity labeling ----
@@ -671,7 +853,6 @@ def main():
     else:
         if not os.path.exists(LABELED_JSONL_PATH):
             logger.error(f"Labeled JSONL not found: {LABELED_JSONL_PATH}")
-            logger.info("Run without --skip-label first.")
             return
 
     # ---- Step 1: Load labeled documents ----
@@ -696,14 +877,14 @@ def main():
         logger.error("No child chunks created. Check your JSONL data.")
         return
 
-    # ---- Dry run: print stats and sample, then exit ----
+    # ---- Dry run ----
     if args.dry_run:
         print_ingest_summary(child_docs, parent_map)
 
-        # Show sample chunks for inspection
         print("\n--- SAMPLE CHILD CHUNKS (first 3) ---")
         for i, doc in enumerate(child_docs[:3]):
-            print(f"\n[Child {i}] metadata: {json.dumps({k: str(v)[:60] for k, v in doc.metadata.items()}, indent=2)}")
+            meta_preview = {k: str(v)[:60] for k, v in doc.metadata.items()}
+            print(f"\n[Child {i}] metadata: {json.dumps(meta_preview, indent=2)}")
             print(f"  text preview: {doc.page_content[:200]}...")
 
         print("\n--- SAMPLE PARENT ENTRIES (first 3) ---")
@@ -715,19 +896,13 @@ def main():
         return
 
     # ---- Step 3: Build stores ----
-    # Ensure directories exist
     os.makedirs(CHROMA_DB_DIR, exist_ok=True)
     os.makedirs(PARENT_STORE_DIR, exist_ok=True)
     os.makedirs(os.path.dirname(BM25_INDEX_PATH), exist_ok=True)
 
-    # ChromaDB
-    vectorstore = build_chroma_store(child_docs)
-
-    # LocalFileStore
-    parent_store = build_parent_store(parent_map)
-
-    # BM25
-    bm25_retriever = build_bm25_index(child_docs)
+    build_chroma_store(child_docs)
+    build_parent_store(parent_map)
+    build_bm25_index(child_docs)
 
     # ---- Step 4: Print summary ----
     print_ingest_summary(child_docs, parent_map)
