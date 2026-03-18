@@ -9,6 +9,7 @@ Stores are loaded lazily on first call and kept in module-level singletons.
 import json
 import logging
 import pickle
+import threading
 import time
 from typing import Dict, List, Literal, Optional
 
@@ -49,8 +50,9 @@ from rag.schemas import QueryVariants
 
 logger = logging.getLogger(__name__)
 
-# ── Module-level singletons (lazy-loaded) ─────────────────────
+# ── Module-level singletons (lazy-loaded, thread-safe) ────────
 
+_init_lock = threading.Lock()
 _vectorstore: Optional[Chroma] = None
 _bm25_retriever = None
 _parent_store: Optional[LocalFileStore] = None
@@ -61,40 +63,49 @@ _query_llm = None
 def _get_vectorstore() -> Chroma:
     global _vectorstore
     if _vectorstore is None:
-        logger.info("Loading ChromaDB from %s ...", CHROMA_DB_DIR)
-        embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)
-        _vectorstore = Chroma(
-            collection_name=CHROMA_COLLECTION_NAME,
-            persist_directory=CHROMA_DB_DIR,
-            embedding_function=embeddings,
-        )
-        logger.info("ChromaDB loaded.")
+        with _init_lock:
+            if _vectorstore is None:  # Double-check after acquiring lock
+                logger.info("Loading ChromaDB from %s ...", CHROMA_DB_DIR)
+                embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)
+                _vectorstore = Chroma(
+                    collection_name=CHROMA_COLLECTION_NAME,
+                    persist_directory=CHROMA_DB_DIR,
+                    embedding_function=embeddings,
+                )
+                logger.info("ChromaDB loaded.")
     return _vectorstore
 
 
 def _get_bm25():
     global _bm25_retriever
     if _bm25_retriever is None:
-        logger.info("Loading BM25 index from %s ...", BM25_INDEX_PATH)
-        with open(BM25_INDEX_PATH, "rb") as f:
-            _bm25_retriever = pickle.load(f)
-        logger.info("BM25 index loaded.")
+        with _init_lock:
+            if _bm25_retriever is None:
+                logger.info("Loading BM25 index from %s ...", BM25_INDEX_PATH)
+                with open(BM25_INDEX_PATH, "rb") as f:
+                    _bm25_retriever = pickle.load(f)
+                _bm25_retriever.k = 15  # Limit results per query
+                logger.info("BM25 index loaded.")
     return _bm25_retriever
 
 
 def _get_parent_store() -> LocalFileStore:
     global _parent_store
     if _parent_store is None:
-        logger.info("Loading LocalFileStore from %s ...", PARENT_STORE_DIR)
-        _parent_store = LocalFileStore(root_path=PARENT_STORE_DIR)
-        logger.info("LocalFileStore loaded.")
+        with _init_lock:
+            if _parent_store is None:
+                logger.info("Loading LocalFileStore from %s ...", PARENT_STORE_DIR)
+                _parent_store = LocalFileStore(root_path=PARENT_STORE_DIR)
+                logger.info("LocalFileStore loaded.")
     return _parent_store
 
 
 def _get_cohere() -> cohere.Client:
     global _cohere_client
     if _cohere_client is None:
-        _cohere_client = cohere.Client(api_key=COHERE_API_KEY)
+        with _init_lock:
+            if _cohere_client is None:
+                _cohere_client = cohere.Client(api_key=COHERE_API_KEY)
     return _cohere_client
 
 
