@@ -1,1 +1,1 @@
-"""RAG system for WTO DSB document retrieval."""
+"""WTO RAG system — retrieval, extraction, and scoring."""

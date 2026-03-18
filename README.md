@@ -30,13 +30,19 @@ WTO/
 │   ├── basic_matrix.py                 # SNA network metrics
 │   └── visualization.py               # Network visualization
 ├── rag/
-│   ├── config.py                       # ChromaDB & embedding settings
-│   ├── indexer.py                      # JSONL -> ChromaDB indexing
-│   └── retriever.py                    # Semantic search with metadata filters
+│   ├── config.py                       # All configuration (paths, models, tuning)
+│   ├── schemas.py                      # Pydantic models for structured LLM output
+│   ├── retrieval.py                    # Hybrid search (BM25 + semantic) + RRF + Cohere rerank
+│   ├── task_a_industry.py              # Stage 1: RAG-based product extraction
+│   ├── task_a_hs_classification.py     # Stage 2: HS section classification (no RAG)
+│   ├── task_b_severity.py              # Severity scoring (3 dimensions)
+│   ├── validation.py                   # Ground truth tests + quality metrics
+│   └── run_all.py                      # Pipeline orchestrator
 ├── scripts/
+│   ├── ingest.py                       # Authoring entity labeling + chunking + store building
 │   ├── process_sample.py               # Process sample cases
 │   ├── process_all.py                  # Process all 626 cases
-│   ├── build_index.py                  # Build vector index
+│   ├── build_index.py                  # Build vector index (legacy, superseded by ingest.py)
 │   ├── build_baci_trade.py             # BACI trade aggregation (dual EU representation)
 │   └── build_dyadic_datasets.py        # Merge ATOP + DESTA + WTO filter
 ├── Output/
@@ -97,14 +103,57 @@ python scripts/process_all.py --rename
 
 ## RAG System
 
-Uses ChromaDB with child-chunk retrieval. Documents are chunked into small pieces for semantic search, with full document context available via metadata.
+Retrieval-augmented generation system for two analytical tasks:
 
-```bash
-# Build index from processed JSONL
-python scripts/build_index.py --input Output/sample/wto_sample.jsonl
+**Task A — Industry/HS Classification** (two stages):
+1. RAG-based extraction of product descriptions and explicit HS codes from dispute documents
+2. Classification into HS sections (1-21) via deterministic lookup or LLM
+
+**Task B — Severity Scoring**:
+Scores political framing intensity on 3 dimensions (rhetorical intensity, core principles invocation, escalation signals) using only the complainant's own documents. Post-hoc z-score normalization within complainant and sector.
+
+### Architecture
+
+```
+Retrieval pipeline (retrieval.py):
+  Query → Multi-query expansion → Hybrid search (ChromaDB + BM25) → RRF fusion → Cohere rerank → Parent chunk lookup
+
+Pre-built stores (Data/stores/, read-only):
+  chroma_db/      — Child chunk vectors (text-embedding-3-small)
+  parent_store/   — Parent chunk texts (65k entries, LocalFileStore)
+  bm25_index.pkl  — BM25 index (1.3 GB)
 ```
 
-Requires `OPENAI_API_KEY` in `.env` file.
+### Running the RAG Pipeline
+
+```bash
+# Set API keys
+export OPENAI_API_KEY="..."
+export COHERE_API_KEY="..."
+
+# Run individual steps
+python -m rag.run_all industry              # Task A Stage 1: extract products
+python -m rag.run_all hs                    # Task A Stage 2: classify HS sections
+python -m rag.run_all severity              # Task B: score severity
+python -m rag.run_all validate              # Quality report
+
+# Run everything
+python -m rag.run_all all
+
+# Options
+python -m rag.run_all industry --cases 379 436 18   # Specific cases
+python -m rag.run_all all --workers 8                # More parallelism
+python -m rag.run_all all --fresh                    # Ignore checkpoints
+```
+
+### RAG Outputs
+
+| File | Rows | Description |
+|------|------|-------------|
+| `Data/Output/industry_extraction.csv` | 626 | Products, explicit HS codes, systemic/services flags |
+| `Data/Output/case_hs_sections.csv` | 626 | HS section mapping per case |
+| `Data/Output/case_section_expanded.csv` | ~800-1200 | One row per case-section pair (for trade merge) |
+| `Data/Output/severity_scores.csv` | 626 | 3 dimensions + composite + z-scores |
 
 ## Social Network Analysis
 
@@ -164,7 +213,12 @@ Requires `OPENAI_API_KEY` in `.env` file.
 ### Python Dependencies
 
 ```bash
-pip install langchain langchain-community langchain-openai chromadb networkx pandas matplotlib selenium pypdf pytesseract pdf2image country_converter
+# Core
+pip install langchain langchain-openai langchain-community langchain-chroma langchain-classic chromadb
+pip install networkx pandas matplotlib selenium pypdf pytesseract pdf2image country_converter
+
+# RAG pipeline
+pip install cohere rank-bm25 tiktoken tqdm pydantic
 ```
 
 ### System Dependencies (for OCR)
@@ -185,5 +239,6 @@ sudo apt-get install tesseract-ocr poppler-utils
 Create `.env` file:
 ```
 OPENAI_API_KEY=your_key_here
-LANGCHAIN_API_KEY=your_key_here  # optional, for LangSmith tracing
+COHERE_API_KEY=your_key_here        # For reranking (free tier sufficient)
+LANGCHAIN_API_KEY=your_key_here     # Optional, for LangSmith tracing
 ```
