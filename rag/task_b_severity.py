@@ -21,6 +21,7 @@ from tqdm import tqdm
 from rag.config import (
     CASES_CSV_PATH,
     CHECKPOINT_EVERY,
+    MAX_CASE_NUM,
     MAX_WORKERS,
     OUTPUT_DIR,
     SEVERITY_MODEL,
@@ -185,15 +186,15 @@ def score_all(
     raw_path = os.path.join(OUTPUT_DIR, "severity_scores_raw.csv")
     output_path = os.path.join(OUTPUT_DIR, "severity_scores.csv")
 
-    cases_df = pd.read_csv(CASES_CSV_PATH)
+    cases_df = pd.read_csv(CASES_CSV_PATH, encoding="utf-8")
     cases_df = cases_df.rename(columns={
         "case": "case_id",
-        "Complainant": "complainant",
-        "Respondent": "respondent",
         "title": "case_title",
     })
     # Strip "DS" prefix: "DS379" → "379"
     cases_df["case_id"] = cases_df["case_id"].astype(str).str.replace(r"^DS", "", regex=True)
+    # Only include cases with collected documents (DS1–DS626)
+    cases_df = cases_df[cases_df["case_id"].astype(int) <= MAX_CASE_NUM]
     if case_ids:
         cases_df = cases_df[cases_df["case_id"].isin(case_ids)]
 

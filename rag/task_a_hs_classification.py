@@ -1,9 +1,13 @@
 """Task A — Stage 2: HS section classification (NO RAG).
 
 Reads industry_extraction.csv and classifies each case into HS sections (1-21).
-Two paths:
+Two paths for RAG-based classification:
   A) Explicit HS codes → deterministic lookup
   B) Product descriptions only → LLM classification
+  C) Systemic/services/no-data → section 00 (general)
+
+Additionally, for cases with a title_product (~396/626), classifies from title
+alone as ground truth for RAG performance evaluation.
 
 Outputs:
   - Data/Output/case_hs_sections.csv       (one row per case)
@@ -21,19 +25,22 @@ from langchain_openai import ChatOpenAI
 from tqdm import tqdm
 
 from rag.config import (
+    CASES_CSV_PATH,
     CLASSIFICATION_MODEL,
     CHECKPOINT_EVERY,
     HS_MAPPING_PATH,
     LLM_BATCH_PAUSE,
+    MAX_CASE_NUM,
     OUTPUT_DIR,
 )
 from rag.schemas import HSClassification
 
 logger = logging.getLogger(__name__)
 
-# ── HS Section reference (21 sections) ────────────────────────
+# ── HS Section reference (0-21, 0 = general/systemic) ────────
 
 HS_SECTIONS = {
+    0: "General (systemic measures, services, or unclassifiable)",
     1: "Live animals; animal products",
     2: "Vegetable products",
     3: "Animal or vegetable fats and oils",
@@ -150,14 +157,18 @@ def _keyword_sections(product_descriptions: str) -> list[int]:
     return sorted(sections)
 
 
-# ── LLM classification prompt ─────────────────────────────────
+# ── LLM classification prompts ───────────────────────────────
+
+_HS_SECTION_LIST = "\n".join(
+    f"Section {num}: {desc}" for num, desc in HS_SECTIONS.items() if num > 0
+)
 
 HS_CLASSIFICATION_PROMPT = ChatPromptTemplate.from_messages([
     ("system",
      "You are an expert in the Harmonized System (HS) trade classification.\n\n"
      "Given product descriptions from a WTO dispute, classify them into the appropriate "
      "HS Sections (1-21). Here are the 21 sections:\n\n"
-     + "\n".join(f"Section {num}: {desc}" for num, desc in HS_SECTIONS.items()) +
+     + _HS_SECTION_LIST +
      "\n\nA dispute may involve multiple sections. Return all applicable sections. "
      "If the products are too vague to classify, return the most likely section(s)."),
     ("human",
@@ -165,11 +176,59 @@ HS_CLASSIFICATION_PROMPT = ChatPromptTemplate.from_messages([
      "Classify into HS sections."),
 ])
 
+TITLE_CLASSIFICATION_PROMPT = ChatPromptTemplate.from_messages([
+    ("system",
+     "You are an expert in the Harmonized System (HS) trade classification.\n\n"
+     "Given ONLY the product name from a WTO dispute case title, classify it into "
+     "the appropriate HS Sections (1-21). Here are the 21 sections:\n\n"
+     + _HS_SECTION_LIST +
+     "\n\nA dispute may involve multiple sections. Return all applicable sections. "
+     "If the product is too vague to classify, return the most likely section(s)."),
+    ("human",
+     "Product from case title: {title_product}\n\n"
+     "Classify into HS sections based ONLY on this product name."),
+])
+
+
+# ── Title-based ground truth classification ──────────────────
+
+def _classify_title_product(
+    title_product: str,
+    structured_llm,
+) -> str:
+    """Classify a title product into HS sections using LLM. Returns pipe-delimited sections."""
+    if not title_product or title_product == "nan":
+        return ""
+
+    # Try keyword match first (fast, no API call)
+    kw_sections = _keyword_sections(title_product)
+    if kw_sections:
+        return "|".join(str(s) for s in kw_sections)
+
+    # LLM classification
+    try:
+        result = structured_llm.invoke(
+            TITLE_CLASSIFICATION_PROMPT.format_messages(title_product=title_product)
+        )
+        sections = sorted(set(s for s in result.sections if 1 <= s <= 21))
+        if sections:
+            return "|".join(str(s) for s in sections)
+    except Exception as e:
+        logger.warning("Title classification failed for '%s': %s", title_product, e)
+
+    return ""
+
 
 # ── Main classification ──────────────────────────────────────
 
 def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Read industry_extraction.csv and classify into HS sections.
+
+    Two independent classifications per case:
+      - title_hs_sections: LLM classifies from `product` column in wto_cases_v2.csv (ground truth)
+      - hs_sections: classifies from RAG-extracted product_descriptions
+
+    Every case gets an HS section — systemic/services/no-data cases get section 0.
 
     Returns:
         (case_hs_sections_df, case_section_expanded_df)
@@ -196,6 +255,14 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
 
     logger.info("Loaded %d cases from %s", len(df), input_path)
 
+    # Load product column from wto_cases_v2.csv as ground truth
+    cases_df = pd.read_csv(CASES_CSV_PATH, dtype={"case": str})
+    cases_df["case_id"] = cases_df["case"].str.replace(r"^DS", "", regex=True)
+    product_lookup = cases_df.set_index("case_id")["product"].to_dict()
+    title_lookup = cases_df.set_index("case_id")["title"].to_dict()
+    n_with_product = sum(1 for v in product_lookup.values() if isinstance(v, str) and v.strip())
+    logger.info("Loaded %d products from %s (ground truth)", n_with_product, CASES_CSV_PATH)
+
     # Resume support
     completed = set()
     results = []
@@ -205,7 +272,7 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
         results = existing.to_dict("records")
         logger.info("Resuming: %d cases already classified", len(completed))
 
-    # LLM for path B
+    # LLM setup
     llm = ChatOpenAI(model=CLASSIFICATION_MODEL, temperature=0)
     structured_llm = llm.with_structured_output(HSClassification)
 
@@ -213,32 +280,48 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
 
     for idx, (_, row) in enumerate(tqdm(pending.iterrows(), total=len(pending), desc="HS classification")):
         case_id = str(row["case_id"])
+        case_title = str(title_lookup.get(case_id, row.get("case_title", "")))
+        product = str(product_lookup.get(case_id, ""))  # Ground truth from title
         product_descriptions = str(row.get("product_descriptions", ""))
         explicit_codes_str = str(row.get("explicit_hs_codes", ""))
         is_systemic = row.get("is_systemic", False)
         is_services = row.get("is_services", False)
-        case_title = str(row.get("case_title", ""))
 
         explicit_codes = [c.strip() for c in explicit_codes_str.split("|") if c.strip()]
 
-        # Systemic / services cases: no classification
+        # ── Ground truth: classify from product column (title-derived) ──
+        title_hs = ""
+        if product and product != "nan":
+            title_hs = _classify_title_product(product, structured_llm)
+            if title_hs:
+                time.sleep(LLM_BATCH_PAUSE)
+
+        # ── RAG-based classification (from product_descriptions) ──
+
+        # Systemic / services cases → section 0
         if is_systemic or is_services:
             results.append({
                 "case_id": case_id,
-                "hs_sections": "",
+                "case_title": case_title,
+                "product": product if product != "nan" else "",
+                "title_hs_sections": title_hs,
+                "hs_sections": "0",
                 "product_descriptions": product_descriptions,
-                "extraction_method": "not_applicable",
-                "confidence": "not_applicable",
+                "extraction_method": "general",
+                "confidence": "high",
                 "reasoning": "Systemic measure" if is_systemic else "Services dispute",
             })
             continue
 
-        # Path A: explicit HS codes → deterministic lookup
+        # Path A: explicit HS codes from RAG → deterministic lookup
         if explicit_codes:
             sections = _hs_code_to_sections(explicit_codes)
             if sections:
                 results.append({
                     "case_id": case_id,
+                    "case_title": case_title,
+                    "product": product if product != "nan" else "",
+                    "title_hs_sections": title_hs,
                     "hs_sections": "|".join(str(s) for s in sections),
                     "product_descriptions": product_descriptions,
                     "extraction_method": "explicit_hs",
@@ -247,8 +330,8 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
                 })
                 continue
 
-        # Path B: LLM classification from product descriptions
-        if product_descriptions:
+        # Path B: LLM classification from RAG product descriptions
+        if product_descriptions and product_descriptions != "nan":
             try:
                 result = structured_llm.invoke(
                     HS_CLASSIFICATION_PROMPT.format_messages(
@@ -262,12 +345,19 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
                 if not sections:
                     sections = _keyword_sections(product_descriptions)
 
+                # Still nothing → section 0
+                if not sections:
+                    sections = [0]
+
                 results.append({
                     "case_id": case_id,
+                    "case_title": case_title,
+                    "product": product if product != "nan" else "",
+                    "title_hs_sections": title_hs,
                     "hs_sections": "|".join(str(s) for s in sections),
                     "product_descriptions": product_descriptions,
                     "extraction_method": "llm_classification",
-                    "confidence": "medium" if sections else "low",
+                    "confidence": "medium" if sections != [0] else "low",
                     "reasoning": result.reasoning,
                 })
                 time.sleep(LLM_BATCH_PAUSE)
@@ -276,8 +366,13 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
                 logger.error("LLM classification failed for DS%s: %s", case_id, e)
                 # Keyword fallback
                 sections = _keyword_sections(product_descriptions)
+                if not sections:
+                    sections = [0]
                 results.append({
                     "case_id": case_id,
+                    "case_title": case_title,
+                    "product": product if product != "nan" else "",
+                    "title_hs_sections": title_hs,
                     "hs_sections": "|".join(str(s) for s in sections),
                     "product_descriptions": product_descriptions,
                     "extraction_method": "keyword_fallback",
@@ -285,11 +380,15 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
                     "reasoning": f"LLM failed, keyword match: {e}",
                 })
         else:
+            # No product descriptions at all → section 0
             results.append({
                 "case_id": case_id,
-                "hs_sections": "",
+                "case_title": case_title,
+                "product": product if product != "nan" else "",
+                "title_hs_sections": title_hs,
+                "hs_sections": "0",
                 "product_descriptions": "",
-                "extraction_method": "no_data",
+                "extraction_method": "general",
                 "confidence": "low",
                 "reasoning": "No product descriptions available",
             })
@@ -303,12 +402,12 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
     sections_df.to_csv(output_path, index=False)
     logger.info("Saved %d rows to %s", len(sections_df), output_path)
 
-    # Build expanded table (one row per case-section pair)
+    # Build expanded table (one row per case-section pair, ALL cases included)
     expanded_rows = []
     for _, row in sections_df.iterrows():
-        hs_str = str(row.get("hs_sections", ""))
+        hs_str = str(row.get("hs_sections", "0"))
         if not hs_str or hs_str == "nan":
-            continue
+            hs_str = "0"
         for sec in hs_str.split("|"):
             sec = sec.strip()
             if sec:
@@ -322,6 +421,23 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
     expanded_df = pd.DataFrame(expanded_rows)
     expanded_df.to_csv(expanded_path, index=False)
     logger.info("Saved %d rows to %s", len(expanded_df), expanded_path)
+
+    # Print comparison stats
+    has_both = sections_df[
+        (sections_df["title_hs_sections"] != "") &
+        (sections_df["hs_sections"] != "0")
+    ]
+    if len(has_both) > 0:
+        matches = 0
+        for _, row in has_both.iterrows():
+            title_set = set(row["title_hs_sections"].split("|"))
+            rag_set = set(row["hs_sections"].split("|"))
+            if title_set & rag_set:  # any overlap
+                matches += 1
+        logger.info(
+            "HS validation: %d/%d cases with title match RAG sections (%.0f%%)",
+            matches, len(has_both), matches / len(has_both) * 100,
+        )
 
     return sections_df, expanded_df
 

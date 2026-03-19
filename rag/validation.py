@@ -123,13 +123,31 @@ def print_task_a_quality():
         df = pd.read_csv(sections_path, dtype={"case_id": str})
         total = len(df)
         has_sections = df["hs_sections"].notna() & (df["hs_sections"] != "") & (df["hs_sections"] != "nan")
+        general = (df["hs_sections"] == "0").sum()
 
         print(f"\n--- Task A: HS Classification ---")
-        print(f"Coverage: {has_sections.sum()}/{total} ({has_sections.mean()*100:.1f}%) — target >85%")
+        print(f"Total: {total}, Classified (1-21): {has_sections.sum() - general}, General (00): {general}")
 
         for method in df["extraction_method"].unique():
             n = (df["extraction_method"] == method).sum()
             print(f"  Method '{method}': {n} ({n/total*100:.1f}%)")
+
+        # Title vs RAG HS comparison
+        if "title_hs_sections" in df.columns:
+            has_both = df[
+                (df["title_hs_sections"].notna()) &
+                (df["title_hs_sections"] != "") &
+                (df["title_hs_sections"] != "nan") &
+                (df["hs_sections"] != "0")
+            ]
+            if len(has_both) > 0:
+                matches = 0
+                for _, row in has_both.iterrows():
+                    title_set = set(str(row["title_hs_sections"]).split("|"))
+                    rag_set = set(str(row["hs_sections"]).split("|"))
+                    if title_set & rag_set:
+                        matches += 1
+                print(f"\n  Title HS vs RAG HS: {matches}/{len(has_both)} overlap ({matches/len(has_both)*100:.1f}%)")
 
 
 # ── Task B quality metrics ────────────────────────────────────

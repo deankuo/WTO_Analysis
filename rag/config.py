@@ -31,7 +31,7 @@ CHROMA_COLLECTION_NAME = "wto_child_chunks"
 # ── Data paths ────────────────────────────────────────────────
 JSONL_PATH = str(PROJECT_ROOT / "Data" / "WTO" / "wto_documents_full.jsonl")
 LABELED_JSONL_PATH = str(PROJECT_ROOT / "Data" / "WTO" / "wto_documents_labeled.jsonl")
-CASES_CSV_PATH = str(PROJECT_ROOT / "Data" / "wto_cases.csv")
+CASES_CSV_PATH = str(PROJECT_ROOT / "Data" / "wto_cases_v2.csv")
 HS_MAPPING_PATH = str(PROJECT_ROOT / "Data" / "hs_section_mapping.json")
 OUTPUT_DIR = str(PROJECT_ROOT / "Data" / "Output")
 
@@ -61,6 +61,9 @@ SEVERITY_PRE_RERANK_K = 15
 TOP_K_FINAL = 8          # Final parent chunks returned to LLM
 RRF_K = 60               # RRF smoothing constant
 NUM_QUERY_VARIANTS = 3   # Multi-query expansion count
+
+# ── RAG document coverage ───────────────────────────────────
+MAX_CASE_NUM = 626   # Documents collected up to DS626; cases 627+ have no PDFs
 
 # ── Batch processing ─────────────────────────────────────────
 COHERE_SLEEP_SECONDS = 6   # Rate limit pause between rerank calls

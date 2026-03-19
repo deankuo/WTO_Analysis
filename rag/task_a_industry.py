@@ -25,6 +25,7 @@ from rag.config import (
     CASES_CSV_PATH,
     CHECKPOINT_EVERY,
     EXTRACTION_MODEL,
+    MAX_CASE_NUM,
     MAX_WORKERS,
     OUTPUT_DIR,
 )
@@ -90,16 +91,16 @@ def _parse_title_product(title: str) -> str:
 # ── Helpers ───────────────────────────────────────────────────
 
 def _load_case_metadata() -> pd.DataFrame:
-    """Load case metadata from wto_cases.csv."""
-    df = pd.read_csv(CASES_CSV_PATH)
+    """Load case metadata from wto_cases_v2.csv, limited to cases with documents."""
+    df = pd.read_csv(CASES_CSV_PATH, encoding="utf-8")
     df = df.rename(columns={
         "case": "case_id",
-        "Complainant": "complainant",
-        "Respondent": "respondent",
         "title": "case_title",
     })
     # Strip "DS" prefix: "DS379" → "379"
     df["case_id"] = df["case_id"].astype(str).str.replace(r"^DS", "", regex=True)
+    # Only include cases with collected documents (DS1–DS626)
+    df = df[df["case_id"].astype(int) <= MAX_CASE_NUM]
     return df
 
 

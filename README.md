@@ -15,7 +15,8 @@ This project analyzes World Trade Organization (WTO) dispute settlement cases th
 WTO/
 ├── Data/
 │   ├── country_meta_1995_2024.csv      # Country-year panel (196 x 30 years, 77 cols)
-│   ├── wto_cases.csv                   # Case metadata (626 cases)
+│   ├── wto_cases_v2.csv                # Case metadata (644 cases, 29 cols)
+│   ├── wto_cases_harmonized.csv        # Harmonized case data with standardized names
 │   ├── wto_dyadic.csv                  # WTO dispute dyads (8,145 rows)
 │   ├── bilateral_trade_wto.csv         # Dyad-year trade + ATOP + DESTA (545k rows)
 │   ├── bilateral_trade_section_wto.csv # Dyad-year-section trade (6.4M rows)
@@ -40,6 +41,7 @@ WTO/
 │   └── run_all.py                      # Pipeline orchestrator
 ├── scripts/
 │   ├── ingest.py                       # Authoring entity labeling + chunking + store building
+│   ├── scrape_wto_cases.py             # Selenium scraper for WTO case metadata (644 cases)
 │   ├── process_sample.py               # Process sample cases
 │   ├── process_all.py                  # Process all 626 cases
 │   ├── build_index.py                  # Build vector index (legacy, superseded by ingest.py)
@@ -107,7 +109,10 @@ Retrieval-augmented generation system for two analytical tasks:
 
 **Task A — Industry/HS Classification** (two stages):
 1. RAG-based extraction of product descriptions and explicit HS codes from dispute documents
-2. Classification into HS sections (1-21) via deterministic lookup or LLM
+2. Classification into HS sections (0-21) via deterministic lookup or LLM; section 0 = general/systemic/services
+   - Two independent classifications: `title_hs_sections` (from `product` column, ground truth) vs `hs_sections` (from RAG)
+
+**Note:** RAG pipeline processes DS1-DS626 only (documents collected up to DS626). Cases DS627+ have metadata but no PDFs.
 
 **Task B — Severity Scoring**:
 Scores political framing intensity on 3 dimensions (rhetorical intensity, core principles invocation, escalation signals) using only the complainant's own documents. Post-hoc z-score normalization within complainant and sector.
@@ -151,7 +156,7 @@ python -m rag.run_all all --fresh                    # Ignore checkpoints
 | File | Rows | Description |
 |------|------|-------------|
 | `Data/Output/industry_extraction.csv` | 626 | Products, explicit HS codes, systemic/services flags |
-| `Data/Output/case_hs_sections.csv` | 626 | HS section mapping per case |
+| `Data/Output/case_hs_sections.csv` | 626 | HS sections per case (title ground truth + RAG) |
 | `Data/Output/case_section_expanded.csv` | ~800-1200 | One row per case-section pair (for trade merge) |
 | `Data/Output/severity_scores.csv` | 626 | 3 dimensions + composite + z-scores |
 
@@ -202,8 +207,10 @@ python -m rag.run_all all --fresh                    # Ignore checkpoints
 
 ### WTO Case Data
 
-- **626 cases** (DS1–DS626) with metadata: complainant, respondent, third parties, agreements cited, procedural dates, dispute stage
-- **9,417 PDFs** across 626 folders, processed into 35 document types
+- **644 cases** (DS1–DS644) in `wto_cases_v2.csv`: complainant, respondent, third parties, product, dispute_stage, current_status, key facts, summary (29 columns)
+- **Country name harmonization**: European Communities → European Union, Turkey → Türkiye
+- **9,417 PDFs** across 626 folders (DS1–DS626), processed into 42 document types
+- RAG pipeline limited to DS1–DS626 (documents collected); cases DS627+ have metadata only
 - Coverage: 1995–2024
 
 > See [`Data/Data.md`](Data/Data.md) for the full variable codebook, source citations, and systematic missing data documentation.
