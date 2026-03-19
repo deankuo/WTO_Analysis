@@ -22,6 +22,7 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from rag.config import (
     BM25_INDEX_PATH,
+    BM25_PER_CASE_PATH,
     CHROMA_COLLECTION_NAME,
     CHROMA_DB_DIR,
     COHERE_API_KEY,
@@ -40,10 +41,18 @@ from rag.config import (
     RRF_K,
     SEVERITY_AUTHORING_ENTITY_FILTER,
     SEVERITY_BM25_WEIGHT,
+    SEVERITY_DOC_TYPE_FILTER,
     SEVERITY_PRE_RERANK_K,
     SEVERITY_SEMANTIC_WEIGHT,
     SEVERITY_USE_HYDE,
     SEVERITY_USE_MULTI_QUERY,
+    THIRD_PARTY_AUTHORING_ENTITY_FILTER,
+    THIRD_PARTY_BM25_WEIGHT,
+    THIRD_PARTY_DOC_TYPE_FILTER,
+    THIRD_PARTY_PRE_RERANK_K,
+    THIRD_PARTY_SEMANTIC_WEIGHT,
+    THIRD_PARTY_USE_HYDE,
+    THIRD_PARTY_USE_MULTI_QUERY,
     TOP_K_FINAL,
 )
 from rag.schemas import QueryVariants
@@ -55,6 +64,7 @@ logger = logging.getLogger(__name__)
 _init_lock = threading.Lock()
 _vectorstore: Optional[Chroma] = None
 _bm25_retriever = None
+_bm25_per_case: Optional[Dict] = None
 _parent_store: Optional[LocalFileStore] = None
 _cohere_client: Optional[cohere.Client] = None
 _query_llm = None
@@ -87,6 +97,18 @@ def _get_bm25():
                 _bm25_retriever.k = 15  # Limit results per query
                 logger.info("BM25 index loaded.")
     return _bm25_retriever
+
+
+def _get_bm25_per_case() -> Dict:
+    global _bm25_per_case
+    if _bm25_per_case is None:
+        with _init_lock:
+            if _bm25_per_case is None:
+                logger.info("Loading per-case BM25 from %s ...", BM25_PER_CASE_PATH)
+                with open(BM25_PER_CASE_PATH, "rb") as f:
+                    _bm25_per_case = pickle.load(f)
+                logger.info("Per-case BM25 loaded (%d cases).", len(_bm25_per_case))
+    return _bm25_per_case
 
 
 def _get_parent_store() -> LocalFileStore:
@@ -132,13 +154,23 @@ def _get_routing_params(task: str) -> Dict:
         }
     elif task == "severity_scoring":
         return {
-            "doc_type_filter": None,
+            "doc_type_filter": SEVERITY_DOC_TYPE_FILTER,
             "authoring_entity_filter": SEVERITY_AUTHORING_ENTITY_FILTER,
             "bm25_weight": SEVERITY_BM25_WEIGHT,
             "semantic_weight": SEVERITY_SEMANTIC_WEIGHT,
             "use_hyde": SEVERITY_USE_HYDE,
             "use_multi_query": SEVERITY_USE_MULTI_QUERY,
             "pre_rerank_k": SEVERITY_PRE_RERANK_K,
+        }
+    elif task == "third_party_scoring":
+        return {
+            "doc_type_filter": THIRD_PARTY_DOC_TYPE_FILTER,
+            "authoring_entity_filter": THIRD_PARTY_AUTHORING_ENTITY_FILTER,
+            "bm25_weight": THIRD_PARTY_BM25_WEIGHT,
+            "semantic_weight": THIRD_PARTY_SEMANTIC_WEIGHT,
+            "use_hyde": THIRD_PARTY_USE_HYDE,
+            "use_multi_query": THIRD_PARTY_USE_MULTI_QUERY,
+            "pre_rerank_k": THIRD_PARTY_PRE_RERANK_K,
         }
     else:
         raise ValueError(f"Unknown task: {task!r}")
@@ -234,19 +266,32 @@ def _bm25_search(
     authoring_entity_filter: Optional[List[str]],
     k: int,
 ) -> List[Document]:
-    """Run BM25 search and post-filter by metadata."""
-    bm25 = _get_bm25()
+    """Run BM25 search using per-case index (fast) or global fallback."""
+    # Try per-case index first (searches ~100 docs instead of 65k)
     try:
-        raw_results = bm25.invoke(query)
+        bm25_dict = _get_bm25_per_case()
+        retriever = bm25_dict.get(case_id)
+        if retriever is None:
+            logger.warning("No BM25 index for case %s", case_id)
+            return []
+        raw_results = retriever.invoke(query)
+    except FileNotFoundError:
+        # Fallback to global BM25 if per-case not built yet
+        logger.warning("Per-case BM25 not found, falling back to global index")
+        bm25 = _get_bm25()
+        try:
+            raw_results = bm25.invoke(query)
+        except Exception as e:
+            logger.warning("BM25 search failed: %s", e)
+            return []
     except Exception as e:
         logger.warning("BM25 search failed: %s", e)
         return []
 
+    # Post-filter by doc_type / authoring_entity (case_id already scoped)
     filtered = []
     for doc in raw_results:
         meta = doc.metadata
-        if meta.get("case_id") != case_id:
-            continue
         if doc_type_filter and meta.get("doc_type") not in doc_type_filter:
             continue
         if authoring_entity_filter and meta.get("authoring_entity") not in authoring_entity_filter:
@@ -351,7 +396,7 @@ def _lookup_parents(documents: List[Document]) -> List[str]:
 def retrieve(
     query: str,
     case_id: str,
-    task: Literal["industry_extraction", "severity_scoring"],
+    task: Literal["industry_extraction", "severity_scoring", "third_party_scoring"],
     top_k_final: int = TOP_K_FINAL,
 ) -> List[str]:
     """Retrieve parent chunk texts relevant to a query for a given case.

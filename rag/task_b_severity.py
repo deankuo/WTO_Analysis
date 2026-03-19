@@ -84,41 +84,6 @@ def _build_query(case_id: str, case_title: str, complainant: str) -> str:
     )
 
 
-# ── Normalization ─────────────────────────────────────────────
-
-def _normalize_scores(df: pd.DataFrame) -> pd.DataFrame:
-    """Apply within-complainant and within-sector z-score normalization."""
-    dims = ["rhetorical_intensity", "core_principles", "escalation_signals", "composite"]
-
-    # Composite score
-    df["composite"] = (
-        df["rhetorical_intensity"] + df["core_principles"] + df["escalation_signals"]
-    ) / 3.0
-
-    # Within-complainant z-score
-    for dim in dims:
-        col = f"{dim}_within_complainant_z"
-        df[col] = df.groupby("complainant")[dim].transform(
-            lambda x: (x - x.mean()) / x.std() if x.std() > 0 else 0.0
-        )
-
-    # Within-sector z-score (requires merge with HS section data)
-    expanded_path = os.path.join(OUTPUT_DIR, "case_section_expanded.csv")
-    if os.path.exists(expanded_path):
-        expanded = pd.read_csv(expanded_path, dtype={"case_id": str})
-        first_section = expanded.drop_duplicates(subset="case_id", keep="first")
-        merged = df.merge(first_section[["case_id", "hs_section"]], on="case_id", how="left")
-
-        for dim in dims:
-            col = f"{dim}_within_sector_z"
-            merged[col] = merged.groupby("hs_section")[dim].transform(
-                lambda x: (x - x.mean()) / x.std() if x.std() > 0 else 0.0
-            )
-        return merged
-    else:
-        logger.warning("case_section_expanded.csv not found — skipping sector normalization")
-        return df
-
 
 # ── Per-case worker ──────────────────────────────────────────
 
@@ -184,7 +149,6 @@ def score_all(
     """
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     raw_path = os.path.join(OUTPUT_DIR, "severity_scores_raw.csv")
-    output_path = os.path.join(OUTPUT_DIR, "severity_scores.csv")
 
     cases_df = pd.read_csv(CASES_CSV_PATH, encoding="utf-8")
     cases_df = cases_df.rename(columns={
@@ -259,18 +223,9 @@ def score_all(
     # Save raw scores
     raw_df = pd.DataFrame(results)
     raw_df.to_csv(raw_path, index=False)
-    logger.info("Saved raw scores to %s", raw_path)
+    logger.info("Saved %d raw scores to %s", len(raw_df), raw_path)
 
-    # Normalize and save final output
-    valid = raw_df.dropna(subset=["rhetorical_intensity", "core_principles", "escalation_signals"]).copy()
-    if len(valid) < len(raw_df):
-        logger.warning("%d cases failed scoring — excluded from normalization", len(raw_df) - len(valid))
-
-    final_df = _normalize_scores(valid)
-    final_df.to_csv(output_path, index=False)
-    logger.info("Saved %d normalized scores to %s", len(final_df), output_path)
-
-    return final_df
+    return raw_df
 
 
 # ── CLI ───────────────────────────────────────────────────────

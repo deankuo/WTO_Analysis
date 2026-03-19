@@ -1,10 +1,11 @@
 """Main orchestrator for the WTO RAG pipeline.
 
 Usage:
-    python -m rag.run_all all                   # Run industry + hs + severity
+    python -m rag.run_all all                   # Run industry + hs + severity + normalize
     python -m rag.run_all industry              # Task A Stage 1 only
     python -m rag.run_all hs                    # Task A Stage 2 only
-    python -m rag.run_all severity              # Task B only
+    python -m rag.run_all severity              # Task B only (raw scores)
+    python -m rag.run_all normalize             # Z-score normalization (needs severity + hs done)
     python -m rag.run_all industry hs           # Multiple steps
     python -m rag.run_all validate              # Run validation report
     python -m rag.run_all industry --cases 379 436   # Specific cases
@@ -20,7 +21,7 @@ from rag.config import COHERE_API_KEY, OPENAI_API_KEY, OUTPUT_DIR
 
 logger = logging.getLogger(__name__)
 
-VALID_STEPS = {"industry", "hs", "severity", "validate", "all"}
+VALID_STEPS = {"industry", "hs", "severity", "third_party", "normalize", "validate", "all"}
 
 
 def _check_env():
@@ -60,7 +61,7 @@ def main():
 
     steps = set(args.steps)
     if "all" in steps:
-        steps = {"industry", "hs", "severity", "validate"}
+        steps = {"industry", "hs", "severity", "third_party", "normalize", "validate"}
 
     start = time.time()
 
@@ -83,10 +84,26 @@ def main():
     # ── Severity scoring (Task B) ──
     if "severity" in steps:
         logger.info("=" * 50)
-        logger.info("Task B: Severity scoring")
+        logger.info("Task B: Severity scoring (raw)")
         logger.info("=" * 50)
         from rag.task_b_severity import score_all
         score_all(case_ids=args.cases, resume=resume, max_workers=args.workers)
+
+    # ── Third party scoring ──
+    if "third_party" in steps:
+        logger.info("=" * 50)
+        logger.info("Task B: Third party scoring (raw)")
+        logger.info("=" * 50)
+        from rag.task_b_third_party import score_third_parties
+        score_third_parties(case_ids=args.cases, resume=resume, max_workers=args.workers)
+
+    # ── Normalization (z-scores) ──
+    if "normalize" in steps:
+        logger.info("=" * 50)
+        logger.info("Normalization: z-scores")
+        logger.info("=" * 50)
+        from rag.normalize import normalize_all
+        normalize_all()
 
     # ── Validation report ──
     if "validate" in steps:

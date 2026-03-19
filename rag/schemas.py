@@ -93,6 +93,46 @@ class SeverityScore(BaseModel):
     )
 
 
+# ── Task B: Third Party Severity ──────────────────────────────
+
+class ThirdPartyScore(BaseModel):
+    """Severity scoring for a third party's interest in a WTO dispute."""
+
+    engagement_intensity: int = Field(
+        ge=1, le=3,
+        description=(
+            "1=Routine/formulaic request ('substantial trade interest'), "
+            "2=Specific interest stated with economic rationale, "
+            "3=Strong language emphasizing systemic concerns or direct trade impact"
+        ),
+    )
+    engagement_evidence: str = Field(
+        description="Quote or paraphrase the specific language justifying the score (max 100 words).",
+    )
+    stake_specificity: int = Field(
+        ge=1, le=3,
+        description=(
+            "1=Generic claim of trade interest, no specifics, "
+            "2=Mentions specific products, trade volumes, or affected industries, "
+            "3=Detailed economic stakes with quantified trade impact"
+        ),
+    )
+    stake_evidence: str = Field(
+        description="Quote or paraphrase the specificity of interest (max 100 words).",
+    )
+    systemic_framing: int = Field(
+        ge=1, le=3,
+        description=(
+            "1=Focused on bilateral interest only, "
+            "2=References broader WTO obligations or precedent concerns, "
+            "3=Frames as threat to multilateral system or core WTO principles"
+        ),
+    )
+    systemic_evidence: str = Field(
+        description="Quote or paraphrase any systemic framing language (max 100 words).",
+    )
+
+
 # ── Multi-query generation ─────────────────────────────────────
 
 class QueryVariants(BaseModel):

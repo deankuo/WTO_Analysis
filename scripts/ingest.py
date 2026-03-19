@@ -766,6 +766,44 @@ def build_bm25_index(
     return bm25_retriever
 
 
+BM25_PER_CASE_PATH = "./Data/stores/bm25_per_case.pkl"
+
+
+def build_bm25_per_case(
+    child_docs: List[Document],
+    index_path: str = BM25_PER_CASE_PATH,
+) -> Dict[str, BM25Retriever]:
+    """Build per-case BM25 indexes: {case_id: BM25Retriever}.
+
+    Each case gets its own BM25 index over only its child chunks,
+    so retrieval searches ~100 docs instead of 65k+.
+    """
+    from collections import defaultdict
+
+    # Group child docs by case_id
+    case_docs: Dict[str, List[Document]] = defaultdict(list)
+    for doc in child_docs:
+        cid = doc.metadata.get("case_id", "")
+        if cid:
+            case_docs[cid].append(doc)
+
+    logger.info(f"Building per-case BM25 indexes for {len(case_docs)} cases...")
+
+    bm25_dict: Dict[str, BM25Retriever] = {}
+    for case_id in tqdm(sorted(case_docs.keys(), key=lambda x: int(x)), desc="BM25 per case"):
+        docs = case_docs[case_id]
+        retriever = BM25Retriever.from_documents(docs)
+        retriever.k = 15
+        bm25_dict[case_id] = retriever
+
+    os.makedirs(os.path.dirname(index_path), exist_ok=True)
+    with open(index_path, "wb") as f:
+        pickle.dump(bm25_dict, f)
+
+    logger.info(f"Per-case BM25 index saved to {index_path} ({len(bm25_dict)} cases)")
+    return bm25_dict
+
+
 # ============================================================
 # Step 4: Summary
 # ============================================================
@@ -839,7 +877,27 @@ def main():
                         help="Test mode: process only N documents")
     parser.add_argument("--dry-run", action="store_true",
                         help="Chunk and print stats, do NOT embed or write stores")
+    parser.add_argument("--bm25-only", action="store_true",
+                        help="Rebuild only BM25 per-case index (skip ChromaDB, parent store, labeling)")
     args = parser.parse_args()
+
+    # ---- BM25-only mode: rebuild per-case BM25 from labeled JSONL ----
+    if args.bm25_only:
+        if not os.path.exists(LABELED_JSONL_PATH):
+            logger.error(f"Labeled JSONL not found: {LABELED_JSONL_PATH}")
+            return
+        logger.info(f"BM25-only mode: loading from {LABELED_JSONL_PATH}")
+        records = []
+        with open(LABELED_JSONL_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    records.append(json.loads(line))
+        logger.info(f"Loaded {len(records)} documents")
+        child_docs, _ = create_chunks(records)
+        build_bm25_per_case(child_docs)
+        logger.info("BM25 per-case index built. Done.")
+        return
 
     # ---- Step 0: Authoring entity labeling ----
     if not args.skip_label:
@@ -903,6 +961,7 @@ def main():
     build_chroma_store(child_docs)
     build_parent_store(parent_map)
     build_bm25_index(child_docs)
+    build_bm25_per_case(child_docs)
 
     # ---- Step 4: Print summary ----
     print_ingest_summary(child_docs, parent_map)

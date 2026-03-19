@@ -26,6 +26,7 @@ RERANK_MODEL = "rerank-v3.5"                      # Cohere reranking
 CHROMA_DB_DIR = str(PROJECT_ROOT / "Data" / "stores" / "chroma_db")
 PARENT_STORE_DIR = str(PROJECT_ROOT / "Data" / "stores" / "parent_store")
 BM25_INDEX_PATH = str(PROJECT_ROOT / "Data" / "stores" / "bm25_index.pkl")
+BM25_PER_CASE_PATH = str(PROJECT_ROOT / "Data" / "stores" / "bm25_per_case.pkl")
 CHROMA_COLLECTION_NAME = "wto_child_chunks"
 
 # ── Data paths ────────────────────────────────────────────────
@@ -51,12 +52,21 @@ INDUSTRY_USE_HYDE = False
 INDUSTRY_USE_MULTI_QUERY = False    # Title + single query is sufficient
 INDUSTRY_PRE_RERANK_K = 15
 
+SEVERITY_DOC_TYPE_FILTER = ["Request_For_Consultations"]
 SEVERITY_AUTHORING_ENTITY_FILTER = ["complainant"]
 SEVERITY_BM25_WEIGHT = 0.3
 SEVERITY_SEMANTIC_WEIGHT = 0.7
 SEVERITY_USE_HYDE = True
-SEVERITY_USE_MULTI_QUERY = True
+SEVERITY_USE_MULTI_QUERY = False
 SEVERITY_PRE_RERANK_K = 15
+
+THIRD_PARTY_DOC_TYPE_FILTER = ["Request_To_Join_Consultations"]
+THIRD_PARTY_AUTHORING_ENTITY_FILTER = ["third_party"]
+THIRD_PARTY_BM25_WEIGHT = 0.5
+THIRD_PARTY_SEMANTIC_WEIGHT = 0.5
+THIRD_PARTY_USE_HYDE = False
+THIRD_PARTY_USE_MULTI_QUERY = False
+THIRD_PARTY_PRE_RERANK_K = 10
 
 TOP_K_FINAL = 8          # Final parent chunks returned to LLM
 RRF_K = 60               # RRF smoothing constant
