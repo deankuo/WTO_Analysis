@@ -37,7 +37,6 @@ from rag.config import (
     MAX_CASE_NUM,
     OUTPUT_DIR,
 )
-from rag.retrieval import retrieve
 from rag.schemas import HSClassification
 
 logger = logging.getLogger(__name__)
@@ -282,6 +281,7 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
         product_descriptions = str(row.get("product_descriptions", ""))
         explicit_codes_str = str(row.get("explicit_hs_codes", ""))
         notes = str(row.get("notes", ""))
+        context = str(row.get("retrieved_context", ""))
 
         explicit_codes = [
             c.strip() for c in explicit_codes_str.split("|")
@@ -316,15 +316,9 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
                 })
                 continue
 
-        # Path B: LLM classification with full context
-        # Retrieve original documents for richer context
-        try:
-            query = f"Products and measures in WTO dispute DS{case_id}: {case_title}"
-            parent_texts = retrieve(query, case_id, task="industry_extraction")
-            context = "\n\n---\n\n".join(parent_texts) if parent_texts else "(No documents retrieved)"
-        except Exception as e:
-            logger.warning("Retrieval failed for DS%s: %s", case_id, e)
-            context = "(Retrieval failed)"
+        # Path B: LLM classification with full context (from Stage 1)
+        if not context or context == "nan":
+            context = "(No documents retrieved)"
 
         try:
             result = structured_llm.invoke(

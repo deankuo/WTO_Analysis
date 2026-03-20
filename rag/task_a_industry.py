@@ -141,6 +141,7 @@ def _process_one_case(case_id: str, case_title: str, structured_llm) -> dict:
             "is_services": result.is_services,
             "confidence": result.confidence,
             "notes": result.notes,
+            "retrieved_context": context,
             "n_parents_retrieved": len(parent_texts),
         }
 
@@ -156,6 +157,7 @@ def _process_one_case(case_id: str, case_title: str, structured_llm) -> dict:
             "is_services": False,
             "confidence": "low",
             "notes": f"ERROR: {e}",
+            "retrieved_context": "",
             "n_parents_retrieved": 0,
         }
 
