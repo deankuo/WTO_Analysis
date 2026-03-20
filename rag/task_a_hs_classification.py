@@ -34,7 +34,9 @@ from rag.config import (
     CHECKPOINT_EVERY,
     HS_MAPPING_PATH,
     LLM_BATCH_PAUSE,
+    LLM_TIMEOUT,
     MAX_CASE_NUM,
+    MAX_CONTEXT_CHARS,
     OUTPUT_DIR,
 )
 from rag.schemas import HSClassification
@@ -269,7 +271,7 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
         logger.info("Resuming: %d cases already classified", len(completed))
 
     # LLM setup
-    llm = ChatOpenAI(model=CLASSIFICATION_MODEL, temperature=0)
+    llm = ChatOpenAI(model=CLASSIFICATION_MODEL, temperature=0, request_timeout=LLM_TIMEOUT)
     structured_llm = llm.with_structured_output(HSClassification)
 
     pending = df[~df["case_id"].isin(completed)]
@@ -316,9 +318,11 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
                 })
                 continue
 
-        # Path B: LLM classification with full context (from Stage 1)
+        # Path B: LLM classification with context from Stage 1
         if not context or context == "nan":
             context = "(No documents retrieved)"
+        elif len(context) > MAX_CONTEXT_CHARS:
+            context = context[:MAX_CONTEXT_CHARS] + "\n\n[... truncated]"
 
         try:
             result = structured_llm.invoke(

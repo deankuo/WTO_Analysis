@@ -24,6 +24,7 @@ from tqdm import tqdm
 from rag.config import (
     CASES_CSV_PATH,
     CHECKPOINT_EVERY,
+    LLM_TIMEOUT,
     MAX_CASE_NUM,
     MAX_WORKERS,
     OUTPUT_DIR,
@@ -204,7 +205,7 @@ def score_all(
             pass
 
     # LLM setup
-    llm = ChatOpenAI(model=SEVERITY_MODEL, temperature=0)
+    llm = ChatOpenAI(model=SEVERITY_MODEL, temperature=0, request_timeout=LLM_TIMEOUT)
     structured_llm = llm.with_structured_output(SeverityScore)
 
     pending = cases_df[~cases_df["case_id"].isin(completed)]

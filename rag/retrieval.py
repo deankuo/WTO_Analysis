@@ -135,7 +135,8 @@ def _get_cohere() -> cohere.Client:
 def _get_query_llm():
     global _query_llm
     if _query_llm is None:
-        _query_llm = ChatOpenAI(model=EXTRACTION_MODEL, temperature=0.7)
+        from rag.config import LLM_TIMEOUT
+        _query_llm = ChatOpenAI(model=EXTRACTION_MODEL, temperature=0.7, request_timeout=LLM_TIMEOUT)
     return _query_llm
 
 

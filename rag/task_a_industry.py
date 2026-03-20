@@ -25,6 +25,7 @@ from rag.config import (
     CASES_CSV_PATH,
     CHECKPOINT_EVERY,
     EXTRACTION_MODEL,
+    LLM_TIMEOUT,
     MAX_CASE_NUM,
     MAX_WORKERS,
     OUTPUT_DIR,
@@ -199,7 +200,7 @@ def extract_all(
             pass
 
     # LLM setup
-    llm = ChatOpenAI(model=EXTRACTION_MODEL, temperature=0)
+    llm = ChatOpenAI(model=EXTRACTION_MODEL, temperature=0, request_timeout=LLM_TIMEOUT)
     structured_llm = llm.with_structured_output(IndustryExtraction)
 
     pending = cases_df[~cases_df["case_id"].isin(completed)]

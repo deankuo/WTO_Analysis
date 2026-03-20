@@ -82,5 +82,7 @@ MAX_CASE_NUM = 626   # Documents collected up to DS626; cases 627+ have no PDFs
 # ── Batch processing ─────────────────────────────────────────
 COHERE_SLEEP_SECONDS = 6   # Rate limit pause between rerank calls
 LLM_BATCH_PAUSE = 0.5      # Pause between LLM calls
+LLM_TIMEOUT = 120           # Seconds before an LLM call times out
 CHECKPOINT_EVERY = 10      # Write intermediate results every N cases
 MAX_WORKERS = 4            # Parallel threads for LLM calls
+MAX_CONTEXT_CHARS = 50000  # Max chars of retrieved context passed to LLM
