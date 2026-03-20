@@ -1,4 +1,4 @@
-"""Post-hoc normalization for severity scores.
+"""Post-hoc normalization for severity and third party scores.
 
 Run AFTER all raw scoring tasks (severity + third_party) and HS classification
 are complete. Computes z-scores over the full population.
@@ -22,6 +22,19 @@ from rag.config import OUTPUT_DIR
 
 logger = logging.getLogger(__name__)
 
+SEVERITY_DIMS = [
+    "rhetorical_aggressiveness",
+    "systemic_reach",
+    "escalation_ultimatum",
+    "domestic_victimhood",
+]
+
+THIRD_PARTY_DIMS = [
+    "engagement_intensity",
+    "evidentiary_depth",
+    "rhetorical_severity",
+]
+
 
 def _compute_z_scores(
     df: pd.DataFrame,
@@ -40,9 +53,9 @@ def _compute_z_scores(
 def normalize_severity() -> pd.DataFrame | None:
     """Normalize complainant severity scores.
 
-    Computes:
-      - within-complainant z-score on severity_score
-      - within-sector z-score (if HS data available)
+    Computes within-complainant and within-sector z-scores for:
+      - each of the 4 dimensions
+      - the composite severity_score
 
     Returns normalized DataFrame, or None if raw scores not found.
     """
@@ -66,15 +79,22 @@ def normalize_severity() -> pd.DataFrame | None:
 
     logger.info("Normalizing %d severity scores", len(df))
 
-    # Within-complainant z-score
-    df = _compute_z_scores(df, "severity_score", "complainant", "within_complainant_z")
+    # Z-scores for composite + each dimension
+    score_cols = ["severity_score"] + SEVERITY_DIMS
+
+    # Within-complainant z-scores
+    for col in score_cols:
+        if col in df.columns:
+            df = _compute_z_scores(df, col, "complainant", "within_complainant_z")
 
     # Within-sector z-scores (requires HS data)
     if os.path.exists(expanded_path):
         expanded = pd.read_csv(expanded_path, dtype={"case_id": str})
         first_section = expanded.drop_duplicates(subset="case_id", keep="first")
         df = df.merge(first_section[["case_id", "hs_section"]], on="case_id", how="left")
-        df = _compute_z_scores(df, "severity_score", "hs_section", "within_sector_z")
+        for col in score_cols:
+            if col in df.columns:
+                df = _compute_z_scores(df, col, "hs_section", "within_sector_z")
         logger.info("Sector z-scores computed using %d HS sections", df["hs_section"].nunique())
     else:
         logger.warning("case_section_expanded.csv not found — skipping sector normalization")
@@ -87,9 +107,9 @@ def normalize_severity() -> pd.DataFrame | None:
 def normalize_third_party() -> pd.DataFrame | None:
     """Normalize third party engagement scores.
 
-    Computes:
-      - within-third-party z-score on engagement_score
-      - within-sector z-score (if HS data available)
+    Computes within-third_party and within-sector z-scores for:
+      - each of the 3 dimensions
+      - the composite engagement_score
 
     Returns normalized DataFrame, or None if raw scores not found.
     """
@@ -110,15 +130,22 @@ def normalize_third_party() -> pd.DataFrame | None:
 
     logger.info("Normalizing %d third party scores", len(df))
 
-    # Within-third-party z-score
-    df = _compute_z_scores(df, "engagement_score", "third_party", "within_third_party_z")
+    # Z-scores for composite + each dimension
+    score_cols = ["engagement_score"] + THIRD_PARTY_DIMS
+
+    # Within-third-party z-scores
+    for col in score_cols:
+        if col in df.columns:
+            df = _compute_z_scores(df, col, "third_party", "within_third_party_z")
 
     # Within-sector z-scores
     if os.path.exists(expanded_path):
         expanded = pd.read_csv(expanded_path, dtype={"case_id": str})
         first_section = expanded.drop_duplicates(subset="case_id", keep="first")
         df = df.merge(first_section[["case_id", "hs_section"]], on="case_id", how="left")
-        df = _compute_z_scores(df, "engagement_score", "hs_section", "within_sector_z")
+        for col in score_cols:
+            if col in df.columns:
+                df = _compute_z_scores(df, col, "hs_section", "within_sector_z")
     else:
         logger.warning("case_section_expanded.csv not found — skipping sector normalization")
 

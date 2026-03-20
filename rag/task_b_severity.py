@@ -1,9 +1,12 @@
 """Task B: Dispute severity scoring.
 
-Scores each case on 3 dimensions of political framing intensity
+Scores each case on 4 dimensions (1-5 each) of political framing intensity
 using only the complainant's own documents (filtered at retrieval).
 
-Output: Data/Output/severity_scores.csv
+Dimensions: rhetorical_aggressiveness, systemic_reach, escalation_ultimatum, domestic_victimhood
+Composite: mean of the 4 dimension scores
+
+Output: Data/Output/severity_scores_raw.csv
 """
 
 import ast
@@ -35,27 +38,46 @@ logger = logging.getLogger(__name__)
 
 SEVERITY_PROMPT = ChatPromptTemplate.from_messages([
     ("system",
-     "You are an expert in WTO dispute settlement. Score the following document on a 1-5 scale "
-     "of political framing and severity.\n\n"
+     "You are an expert in WTO dispute settlement and International Political Economy. "
+     "Analyze the political framing intensity of the following 'Request for Consultations' (RfC).\n\n"
      
-     "### SCORING ANCHORS (Reference these as ground truth):\n"
-     "- LEVEL 1: DS3 (US v S. Korea). Key: Purely hedged boilerplate, neutral tone.\n"
-     "- LEVEL 3: DS267 (Brazil v US). Key: Assertive, data-heavy, mentions specific losses (e.g., $600M+).\n"
-     "- LEVEL 5: DS574 (Venezuela v US). Key: Geopolitical framing, uses words like 'coercive', 'isolate'.\n\n"
+     "### SCORING RUBRIC (1-5 Scale) ###\n"
+     "DIMENSION 1: Rhetorical Aggressiveness\n"
+     "- 1 (Purely Procedural): Uses hedged, boilerplate language ('appears to be inconsistent').\n"
+     "- 2 (Formal): Standard legal assertions without added emphasis.\n"
+     "- 3 (Assertive): Uses active verbs like 'fails to conform' or 'violates'.\n"
+     "- 4 (Strong): Employs emphatic language like 'serious nullification' or 'severely undermines'.\n"
+     "- 5 (Hostile/Geopolitical): Uses inflammatory terms like 'coercive', 'blatant', or 'economic isolation'.\n\n"
      
-     "### DIMENSION: COMPLAINANT SEVERITY (1-5)\n"
-     "1: Procedural/Hedged. 'Appears to be inconsistent with...'\n"
-     "2: Formal/Technical. Standard legal claims without emphasis.\n"
-     "3: Assertive. Uses stronger verbs, cites economic data/losses.\n"
-     "4: Strong. Claims systemic impairment or broad domestic damage.\n"
-     "5: Aggressive. Confrontational, geopolitical framing, inflammatory language.\n\n"
+     "DIMENSION 2: Systemic Reach (Scope of Target)\n"
+     "- 1 (Product-specific): Targets a single HS code or a specific import shipment.\n"
+     "- 2 (Multi-product): Targets a group of related goods.\n"
+     "- 3 (Sector-wide): Targets an entire industry (e.g., all agricultural subsidies).\n"
+     "- 4 (Policy/Methodology): Challenges an administrative method or specific regulation (As-applied).\n"
+     "- 5 (Regime-challenging): Challenges a national law, constitutionality, or horizontal system (As-such).\n\n"
      
-     "### OUTPUT FORMAT ###\n"
-     "Return a JSON object with:\n"
-     "1. 'reasoning': A 2-sentence explanation of why this score was chosen.\n"
-     "2. 'evidence': A direct quote from the text.\n"
-     "3. 'score': The integer 1-5."),
-    ("human", "Case: DS{case_id}\nComplainant: {complainant}\n\nDocument Text:\n{context}")
+     "DIMENSION 3: Escalation & Ultimatum\n"
+     "- 1 (Routine): Purely procedural request to initiate the 60-day window.\n"
+     "- 2 (Frictional): Briefly mentions previous bilateral attempts to resolve the issue.\n"
+     "- 3 (Breakdown): Explicitly states that prior consultations or negotiations have failed.\n"
+     "- 4 (Pattern-based): Cites a systemic, long-term pattern of non-compliance by the respondent.\n"
+     "- 5 (Retaliatory): Implies the need for rebalancing, retaliation, or 'all available remedies'.\n\n"
+
+     "DIMENSION 4: Domestic Victimhood Framing\n"
+     "- 1 (None): Purely technical legal claims; no mention of domestic economic pain.\n"
+     "- 2 (Market Access): Mentions barriers to exporters without describing specific damage.\n"
+     "- 3 (Economic Loss): Cites specific data on production loss, unemployment, or trade volume drop.\n"
+     "- 4 (National Interest): Frames the measure as a threat to national economic strategy or core sectors.\n"
+     "- 5 (Existential): Describes the measure as a threat to national livelihoods or survival.\n\n"
+
+     "### ANCHOR CASES ###\n"
+     "- L1: DS3 (US v S. Korea) - Purely hedged boilerplate.\n"
+     "- L3: DS267 (Brazil v US) - Cites $600M+ losses and 'serious prejudice'.\n"
+     "- L5: DS574 (Venezuela v US) - Uses 'coercive' and 'geopolitical' framing.\n\n"
+     
+     "### OUTPUT REQUIREMENTS ###\n"
+     "Return a JSON object with 'scores' (dict), 'reasoning' (max 2 sentences per dimension), and 'evidence' (exact quotes)."),
+    ("human", "Case: DS{case_id}\nComplainant: {complainant}\n\nText:\n{context}")
 ])
 
 
@@ -101,10 +123,21 @@ def _score_one_case(case_id: str, case_title: str, complainant: str, structured_
             )
         )
 
+        severity_score = (
+            result.rhetorical_aggressiveness
+            + result.systemic_reach
+            + result.escalation_ultimatum
+            + result.domestic_victimhood
+        ) / 4.0
+
         return {
             "case_id": case_id,
             "complainant": complainant,
-            "severity_score": result.score,
+            "rhetorical_aggressiveness": result.rhetorical_aggressiveness,
+            "systemic_reach": result.systemic_reach,
+            "escalation_ultimatum": result.escalation_ultimatum,
+            "domestic_victimhood": result.domestic_victimhood,
+            "severity_score": round(severity_score, 2),
             "reasoning": result.reasoning,
             "evidence": result.evidence,
             "n_parents_retrieved": len(parent_texts),
@@ -115,6 +148,10 @@ def _score_one_case(case_id: str, case_title: str, complainant: str, structured_
         return {
             "case_id": case_id,
             "complainant": complainant,
+            "rhetorical_aggressiveness": None,
+            "systemic_reach": None,
+            "escalation_ultimatum": None,
+            "domestic_victimhood": None,
             "severity_score": None,
             "reasoning": f"ERROR: {e}",
             "evidence": "",

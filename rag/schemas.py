@@ -65,52 +65,60 @@ class HSClassification(BaseModel):
     )
 
 
-# ── Task B: Severity Scoring ──────────────────────────────────
+# ── Task B: Severity Scoring (4 dimensions, 1-5 each) ────────
 
 class SeverityScore(BaseModel):
-    """Complainant severity scoring (1-5 scale)."""
+    """Complainant severity scoring — 4 dimensions on 1-5 scale."""
 
-    score: int = Field(
+    rhetorical_aggressiveness: int = Field(
         ge=1, le=5,
-        description=(
-            "1=Procedural/hedged (e.g., DS3), "
-            "2=Formal/technical, "
-            "3=Assertive with data/losses (e.g., DS267), "
-            "4=Strong systemic impairment claims, "
-            "5=Aggressive/geopolitical confrontation (e.g., DS574)"
-        ),
+        description="1=Procedural/hedged, 3=Assertive, 5=Hostile/geopolitical framing.",
+    )
+    systemic_reach: int = Field(
+        ge=1, le=5,
+        description="1=Product-specific, 3=Sector-wide, 5=Regime-challenging (as-such).",
+    )
+    escalation_ultimatum: int = Field(
+        ge=1, le=5,
+        description="1=Routine procedural, 3=Breakdown of negotiations, 5=Retaliatory/rebalancing.",
+    )
+    domestic_victimhood: int = Field(
+        ge=1, le=5,
+        description="1=No domestic pain mentioned, 3=Economic loss with data, 5=Existential threat.",
     )
     reasoning: str = Field(
-        description="2-sentence explanation of why this score was chosen (max 50 words).",
+        description="Brief explanation per dimension (max 2 sentences each).",
     )
     evidence: str = Field(
-        description="Direct quote from the text that best supports the score.",
+        description="Key direct quotes from the text supporting the scores.",
     )
 
 
-# ── Task B: Third Party Engagement ───────────────────────────
+# ── Task B: Third Party Engagement (3 dimensions, 1-5 each) ──
 
 class ThirdPartyScore(BaseModel):
-    """Third party engagement scoring (1-5 scale)."""
+    """Third party engagement scoring — 3 dimensions on 1-5 scale."""
 
-    score: int = Field(
+    engagement_intensity: int = Field(
         ge=1, le=5,
-        description=(
-            "1=Formulaic/procedural (e.g., DS109), "
-            "2=Minimalist with sector identification, "
-            "3=Substantive/evidentiary (e.g., DS434), "
-            "4=Strategic/systemic policy concerns, "
-            "5=Existential/urgent rhetoric (e.g., DS27)"
-        ),
+        description="1=Formulaic/procedural, 3=Substantive motivation, 5=Highly engaged/challenging.",
+    )
+    evidentiary_depth: int = Field(
+        ge=1, le=5,
+        description="1=No data, 3=Specific trade data, 5=Crisis-level dependency stats.",
+    )
+    rhetorical_severity: int = Field(
+        ge=1, le=5,
+        description="1=Neutral/observational, 3=Critical/negative impact, 5=Existential/crisis rhetoric.",
     )
     reasoning: str = Field(
-        description="2-sentence explanation of why this score was chosen (max 50 words).",
+        description="Brief explanation per dimension.",
     )
     evidence: str = Field(
-        description="The most telling phrase or sentence from the document.",
+        description="Key quotes from the document supporting the scores.",
     )
-    interest_type: str = Field(
-        description="Classify as either 'Systemic' (rule-focused) or 'Commercial' (market-access focused).",
+    alignment: str = Field(
+        description="Third party alignment: 'Neutral', 'Complainant', or 'Respondent'.",
     )
 
 

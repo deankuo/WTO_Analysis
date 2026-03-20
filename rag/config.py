@@ -15,6 +15,10 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 COHERE_API_KEY = os.getenv("COHERE_API_KEY")
 
+# ── LangSmith tracing (disable if no API key) ────────────────
+if not os.getenv("LANGCHAIN_API_KEY"):
+    os.environ["LANGCHAIN_TRACING_V2"] = "false"
+
 # ── Models ────────────────────────────────────────────────────
 EMBEDDING_MODEL = "text-embedding-3-small"
 EXTRACTION_MODEL = "gpt-5-mini"   # Task A industry extraction

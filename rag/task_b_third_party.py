@@ -38,31 +38,38 @@ logger = logging.getLogger(__name__)
 
 THIRD_PARTY_PROMPT = ChatPromptTemplate.from_messages([
     ("system",
-     "You are an expert in WTO law and International Political Economy (IPE). "
-     "Analyze the following 'Request to Join Consultations' by a third party. "
-     "Your goal is to measure the 'Intensity of Interest' on a 1-5 scale.\n\n"
+     "You are an expert in WTO Law. Analyze the 'Request to Join Consultations' by a third party.\n\n"
+     
+     "### SCORING RUBRIC (1-5 Scale) ###\n"
+     "DIMENSION 1: Engagement Intensity\n"
+     "- 1 (Formulaic): Single-sentence procedural notification ('substantial trade interest').\n"
+     "- 2 (Minimalist): Briefly identifies the product or sector of interest.\n"
+     "- 3 (Substantive): Detailed description of the motivation for joining.\n"
+     "- 4 (Legal Posturing): Expresses specific legal views or systemic concerns beyond trade volume.\n"
+     "- 5 (Highly Engaged): Challenges the respondent's conduct or procedural fairness directly.\n\n"
+     
+     "DIMENSION 2: Evidentiary Depth\n"
+     "- 1 (No Data): Purely qualitative or procedural statements.\n"
+     "- 2 (General): Mentions being a 'major exporter' without specific figures.\n"
+     "- 3 (Specific): Provides preliminary data on trade shares or market access impact.\n"
+     "- 4 (Analytical): Comprehensive data on industry impact, jobs, or market share changes.\n"
+     "- 5 (Crisis-level): Highlights extreme dependency (e.g., sector is % of total GDP/exports).\n\n"
+     
+     "DIMENSION 3: Rhetorical Severity\n"
+     "- 1 (Neutral): Purely observational, no emotive or judgmental language.\n"
+     "- 2 (Concerned): Uses mild terms like 'may affect' or 'potential impact'.\n"
+     "- 3 (Critical): States that the measure has a 'negative impact' or 'burdensome effect'.\n"
+     "- 4 (Strong): Calls the measure 'unacceptable', 'discriminatory', or 'distortive'.\n"
+     "- 5 (Existential): Uses crisis rhetoric like 'economic collapse' or 'inevitable ruin'.\n\n"
 
-     "### SCORING ANCHORS (Reference these as ground truth):\n"
-     "- LEVEL 1: DS109 (Peru joining US v Chile). Key: Formulaic, single sentence, no trade data, pure procedural notification.\n"
-     "- LEVEL 3: DS434 (Nicaragua joining Ukraine v Australia). Key: Mentions specific 'negative impact on production and employment'.\n"
-     "- LEVEL 5: DS27 (Saint Lucia joining Ecuador v EU). Key: Existential framing, 'economic collapse would seem inevitable', high trade-to-GDP stakes.\n\n"
-
-     "### DIMENSION: ENGAGEMENT INTENSITY (1-5)\n"
-     "1: Formulaic/Procedural. Uses only standard DSU Article 4.11 boilerplate. No justification provided beyond 'substantial trade interest'.\n"
-     "2: Minimalist. Identifies the specific product or sector but lacks data or narrative depth.\n"
-     "3: Substantive/Evidentiary. Provides specific reasons, mentions domestic industry impact, or provides preliminary trade data.\n"
-     "4: Strategic/Systemic. Links the dispute to broader policy concerns or offers specific legal interpretations of why the measure is harmful.\n"
-     "5: Existential/Urgent. High-stakes rhetoric. Claims the dispute affects national survival, key development goals, or threatens massive economic collapse.\n\n"
-
-     "### OUTPUT FORMAT ###\n"
-     "Return a JSON object with:\n"
-     "1. 'reasoning': A 2-sentence explanation of why this score was chosen (max 50 words).\n"
-     "2. 'evidence': The most telling phrase or sentence from the document.\n"
-     "3. 'score': The integer 1-5.\n"
-     "4. 'interest_type': Classify as either 'Systemic' (rule-focused) or 'Commercial' (market-access focused)."),
-    ("human",
-     "Case: DS{case_id}\nThird Party: {third_party}\n\n"
-     "Document Text:\n{context}"),
+     "### ANCHOR CASES ###\n"
+     "- L1: DS109 (Peru) - Procedural placeholder.\n"
+     "- L3: DS434 (Nicaragua) - Mentions production and employment impact.\n"
+     "- L5: DS27 (Saint Lucia) - Frames impact as 'economic collapse'.\n\n"
+     
+     "### OUTPUT REQUIREMENTS ###\n"
+     "Return a JSON object with 'scores' (dict), 'reasoning' (concise), 'evidence' (quotes), and 'alignment' (Neutral/Complainant/Respondent)."),
+    ("human", "Case: DS{case_id}\nThird Party: {third_party}\n\nText:\n{context}")
 ])
 
 
@@ -109,10 +116,13 @@ def _score_one_third_party(
             return {
                 "case_id": case_id,
                 "third_party": third_party,
+                "engagement_intensity": None,
+                "evidentiary_depth": None,
+                "rhetorical_severity": None,
                 "engagement_score": None,
                 "reasoning": "no_document",
                 "evidence": "",
-                "interest_type": "",
+                "alignment": "",
                 "has_joining_request": False,
                 "n_parents_retrieved": 0,
             }
@@ -125,13 +135,22 @@ def _score_one_third_party(
             )
         )
 
+        engagement_score = (
+            result.engagement_intensity
+            + result.evidentiary_depth
+            + result.rhetorical_severity
+        ) / 3.0
+
         return {
             "case_id": case_id,
             "third_party": third_party,
-            "engagement_score": result.score,
+            "engagement_intensity": result.engagement_intensity,
+            "evidentiary_depth": result.evidentiary_depth,
+            "rhetorical_severity": result.rhetorical_severity,
+            "engagement_score": round(engagement_score, 2),
             "reasoning": result.reasoning,
             "evidence": result.evidence,
-            "interest_type": result.interest_type,
+            "alignment": result.alignment,
             "has_joining_request": True,
             "n_parents_retrieved": len(relevant),
         }
@@ -141,10 +160,13 @@ def _score_one_third_party(
         return {
             "case_id": case_id,
             "third_party": third_party,
+            "engagement_intensity": None,
+            "evidentiary_depth": None,
+            "rhetorical_severity": None,
             "engagement_score": None,
             "reasoning": f"ERROR: {e}",
             "evidence": "",
-            "interest_type": "",
+            "alignment": "",
             "has_joining_request": False,
             "n_parents_retrieved": 0,
         }

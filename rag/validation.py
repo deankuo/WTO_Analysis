@@ -152,37 +152,76 @@ def print_task_a_quality():
 
 # ── Task B quality metrics ────────────────────────────────────
 
+def _print_dim_stats(df: pd.DataFrame, dim: str):
+    """Print score distribution for a single dimension."""
+    vals = df[dim].dropna()
+    if len(vals) == 0:
+        print(f"    {dim}: no data")
+        return
+    dist = ", ".join(f"{s}:{(vals==s).sum()}" for s in range(1, 6))
+    print(f"    {dim}: mean={vals.mean():.2f}, std={vals.std():.2f}  [{dist}]")
+
+
 def print_task_b_quality():
     """Print score distribution and normalization stats for Task B."""
-    output_path = os.path.join(OUTPUT_DIR, "severity_scores.csv")
-    if not os.path.exists(output_path):
-        print("severity_scores.csv not found — run scoring first.")
-        return
+    sev_dims = ["rhetorical_aggressiveness", "systemic_reach", "escalation_ultimatum", "domestic_victimhood"]
+    tp_dims = ["engagement_intensity", "evidentiary_depth", "rhetorical_severity"]
 
-    df = pd.read_csv(output_path, dtype={"case_id": str})
-    dims = ["rhetorical_intensity", "core_principles", "escalation_signals"]
-
-    print(f"\n--- Task B Quality Report ---")
-    print(f"Total scored: {len(df)} cases")
-
-    for dim in dims:
-        vals = df[dim].dropna()
-        print(f"\n  {dim}:")
-        for score in [1, 2, 3]:
-            n = (vals == score).sum()
-            print(f"    Score {score}: {n} ({n/len(vals)*100:.1f}%)")
-        print(f"    Mean: {vals.mean():.2f}, Std: {vals.std():.2f}")
-
-    if "composite" in df.columns:
-        comp = df["composite"].dropna()
-        print(f"\n  Composite: mean={comp.mean():.2f}, std={comp.std():.2f}")
-
+    # ── Severity scores ──
     raw_path = os.path.join(OUTPUT_DIR, "severity_scores_raw.csv")
-    if os.path.exists(raw_path):
-        raw = pd.read_csv(raw_path, dtype={"case_id": str})
-        failed = raw["rhetorical_intensity"].isna().sum()
-        if failed > 0:
-            print(f"\n  WARNING: {failed} cases failed scoring (see severity_scores_raw.csv)")
+    norm_path = os.path.join(OUTPUT_DIR, "severity_scores.csv")
+
+    print(f"\n--- Task B: Severity Scoring (4 dims x 1-5) ---")
+
+    sev_path = norm_path if os.path.exists(norm_path) else raw_path
+    if not os.path.exists(sev_path):
+        print("  No severity scores found — run scoring first.")
+    else:
+        df = pd.read_csv(sev_path, dtype={"case_id": str})
+        failed = df["severity_score"].isna().sum()
+        scored = len(df) - failed
+
+        print(f"  Total cases: {len(df)}, Scored: {scored}, Failed: {failed}")
+        for dim in sev_dims:
+            if dim in df.columns:
+                _print_dim_stats(df, dim)
+
+        comp = df["severity_score"].dropna()
+        if len(comp) > 0:
+            print(f"    severity_score (composite): mean={comp.mean():.2f}, std={comp.std():.2f}")
+
+        if os.path.exists(norm_path) and "severity_score_within_complainant_z" in df.columns:
+            z = df["severity_score_within_complainant_z"].dropna()
+            print(f"  Within-complainant z-score: mean={z.mean():.2f}, std={z.std():.2f}")
+
+    # ── Third party scores ──
+    tp_raw_path = os.path.join(OUTPUT_DIR, "third_party_scores_raw.csv")
+    tp_norm_path = os.path.join(OUTPUT_DIR, "third_party_scores.csv")
+
+    print(f"\n--- Task B: Third Party Engagement (3 dims x 1-5) ---")
+
+    tp_path = tp_norm_path if os.path.exists(tp_norm_path) else tp_raw_path
+    if not os.path.exists(tp_path):
+        print("  No third party scores found — run third_party scoring first.")
+    else:
+        df = pd.read_csv(tp_path, dtype={"case_id": str})
+        has_doc = df["has_joining_request"].sum() if "has_joining_request" in df.columns else len(df)
+        scored = df["engagement_score"].notna().sum()
+
+        print(f"  Total pairs: {len(df)}, With document: {has_doc}, Scored: {scored}")
+        for dim in tp_dims:
+            if dim in df.columns:
+                _print_dim_stats(df, dim)
+
+        comp = df["engagement_score"].dropna()
+        if len(comp) > 0:
+            print(f"    engagement_score (composite): mean={comp.mean():.2f}, std={comp.std():.2f}")
+
+        if "alignment" in df.columns:
+            types = df["alignment"].value_counts()
+            for t, n in types.items():
+                if t:
+                    print(f"    Alignment '{t}': {n}")
 
 
 # ── Full report ───────────────────────────────────────────────
