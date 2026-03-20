@@ -55,13 +55,38 @@ class IndustryExtraction(BaseModel):
 # ── Task A Stage 2: HS Section Classification ─────────────────
 
 class HSClassification(BaseModel):
-    """Classification of product descriptions into HS sections."""
+    """Two-step classification: product vs policy, then HS sections."""
 
+    case_type: Literal["product", "policy"] = Field(
+        description=(
+            "'product' if the dispute targets specific traded goods "
+            "(e.g., steel, salmon, automobiles). "
+            "'policy' if the dispute challenges a law, regulation, methodology, "
+            "or systemic measure without targeting specific products."
+        )
+    )
     sections: List[int] = Field(
-        description="List of HS section numbers (1-21) that correspond to the products described."
+        description=(
+            "HS section numbers (1-21). "
+            "For product cases: the specific sections the products fall under. "
+            "For policy cases: all 21 sections if horizontal, "
+            "or the specific sections the policy primarily affects."
+        )
     )
     reasoning: str = Field(
-        description="Brief explanation of why these sections were selected."
+        description=(
+            "Explain the classification decision. "
+            "For product cases: why these sections match the products. "
+            "For policy cases: why this is a policy dispute and which sectors it affects."
+        )
+    )
+    policy_description: str = Field(
+        default="",
+        description=(
+            "Only for policy cases: brief description of the policy/measure "
+            "(e.g., 'anti-dumping methodology', 'import licensing regime'). "
+            "Leave empty for product cases."
+        ),
     )
 
 

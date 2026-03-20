@@ -62,6 +62,7 @@ logger = logging.getLogger(__name__)
 # ── Module-level singletons (lazy-loaded, thread-safe) ────────
 
 _init_lock = threading.Lock()
+_cohere_lock = threading.Lock()  # Serialize Cohere calls to avoid concurrent 429s
 _vectorstore: Optional[Chroma] = None
 _bm25_retriever = None
 _bm25_per_case: Optional[Dict] = None
@@ -336,7 +337,7 @@ def _rerank(
     documents: List[Document],
     top_n: int,
 ) -> List[Document]:
-    """Rerank child chunks using Cohere."""
+    """Rerank child chunks using Cohere. Thread-safe with serialized access."""
     if not documents:
         return []
 
@@ -345,12 +346,14 @@ def _rerank(
 
     for attempt in range(5):
         try:
-            response = co.rerank(
-                model=RERANK_MODEL,
-                query=query,
-                documents=texts,
-                top_n=min(top_n, len(texts)),
-            )
+            # Serialize Cohere calls to avoid concurrent 429s from multiple workers
+            with _cohere_lock:
+                response = co.rerank(
+                    model=RERANK_MODEL,
+                    query=query,
+                    documents=texts,
+                    top_n=min(top_n, len(texts)),
+                )
             return [documents[r.index] for r in response.results]
         except Exception as e:
             if "429" in str(e) or "rate" in str(e).lower():

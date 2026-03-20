@@ -1,17 +1,21 @@
-"""Task A — Stage 2: HS section classification (NO RAG).
+"""Task A — Stage 2: HS section classification.
 
-Reads industry_extraction.csv and classifies each case into HS sections (1-21).
-Two paths for RAG-based classification:
-  A) Explicit HS codes → deterministic lookup
-  B) Product descriptions only → LLM classification
-  C) Systemic/services/no-data → section 00 (general)
+Two-step classification per case:
+  Step 1: LLM decides if the case is PRODUCT-specific or POLICY/systemic.
+  Step 2: LLM classifies into HS sections (1-21) with reasoning.
 
-Additionally, for cases with a title_product (~396/626), classifies from title
-alone as ground truth for RAG performance evaluation.
+Inputs:
+  - Data/Output/industry_extraction.csv (product_descriptions, notes from Stage 1)
+  - Data/wto_cases_v2.csv (product column = title-derived ground truth)
+  - RAG retrieval (original document text, re-retrieved per case)
 
 Outputs:
   - Data/Output/case_hs_sections.csv       (one row per case)
   - Data/Output/case_section_expanded.csv   (one row per case-section pair)
+
+Mutual exclusivity: each case is either PRODUCT or POLICY, never both.
+  - PRODUCT: product_descriptions populated, policy empty → sections from products
+  - POLICY: policy populated, product_descriptions empty → sections from policy scope
 """
 
 import json
@@ -33,16 +37,16 @@ from rag.config import (
     MAX_CASE_NUM,
     OUTPUT_DIR,
 )
+from rag.retrieval import retrieve
 from rag.schemas import HSClassification
 
 logger = logging.getLogger(__name__)
 
-# ── HS Section reference (0 = unknown/unclassifiable, 1-21 = standard) ──
+# ── HS Section reference (1-21 = standard sections) ─────────
 
 ALL_SECTIONS_STR = "|".join(str(i) for i in range(1, 22))  # "1|2|3|...|21"
 
 HS_SECTIONS = {
-    0: "Unknown (unclassifiable)",
     1: "Live animals; animal products",
     2: "Vegetable products",
     3: "Animal or vegetable fats and oils",
@@ -107,10 +111,10 @@ def _hs_code_to_sections(codes: list[str]) -> list[int]:
 
     sections = set()
     for code in codes:
-        # Extract first 2 digits (chapter) from codes like "7208", "72.08", "8708.29"
         cleaned = code.strip().replace(".", "").replace(" ", "")
-        # Remove "HS" prefix if present
         cleaned = cleaned.upper().replace("HS", "").strip()
+        if not cleaned or cleaned == "NAN":
+            continue
         if len(cleaned) >= 2:
             try:
                 chapter = int(cleaned[:2])
@@ -121,143 +125,61 @@ def _hs_code_to_sections(codes: list[str]) -> list[int]:
     return sorted(sections)
 
 
-# ── Keyword fallback ──────────────────────────────────────────
-
-KEYWORD_TO_SECTIONS = {
-    "salmon": [1], "shrimp": [1], "beef": [1], "poultry": [1],
-    "chicken": [1], "pork": [1], "meat": [1], "fish": [1],
-    "dairy": [1, 4], "milk": [4],
-    "cotton": [2, 11], "rice": [2], "sugar": [4], "banana": [2],
-    "corn": [2], "maize": [2], "wheat": [2], "soybean": [2],
-    "olive": [2, 3], "wine": [4], "spirit": [4], "tobacco": [4],
-    "petroleum": [5], "oil": [5], "mineral": [5], "coal": [5],
-    "pharmaceutical": [6], "chemical": [6], "fertilizer": [6],
-    "plastic": [7], "rubber": [7], "tyre": [7], "tire": [7],
-    "leather": [8], "hide": [8],
-    "lumber": [9], "softwood": [9], "timber": [9], "wood": [9],
-    "paper": [10], "pulp": [10],
-    "textile": [11], "garment": [11], "apparel": [11], "fabric": [11],
-    "footwear": [12], "shoe": [12],
-    "cement": [13], "glass": [13], "ceramic": [13],
-    "steel": [15], "iron": [15], "aluminium": [15], "aluminum": [15],
-    "copper": [15], "zinc": [15], "metal": [15],
-    "semiconductor": [16], "machinery": [16], "electronic": [16],
-    "computer": [16], "turbine": [16],
-    "automobile": [17], "auto part": [17], "vehicle": [17],
-    "aircraft": [17], "ship": [17], "railway": [17],
-    "solar panel": [16], "photovoltaic": [16], "wind turbine": [16],
-}
-
-
-def _keyword_sections(product_descriptions: str) -> list[int]:
-    """Fallback: match product descriptions against keyword map."""
-    lower = product_descriptions.lower()
-    sections = set()
-    for keyword, secs in KEYWORD_TO_SECTIONS.items():
-        if keyword in lower:
-            sections.update(secs)
-    return sorted(sections)
-
-
-# ── Policy / systemic detection ──────────────────────────────
-
-# These indicate the case targets a policy/measure rather than (or in addition to) specific products
-POLICY_KEYWORDS = [
-    "measures", "measure", "law", "laws", "legislation",
-    "tax", "taxes", "taxation", "internal taxes",
-    "tariff", "tariffs", "customs duties", "duties", "duty",
-    "subsidy", "subsidies", "support programmes", "support program",
-    "regime", "procedures", "regulations", "regulation", "rules",
-    "safeguard", "safeguards",
-    "anti-dumping", "antidumping", "countervailing",
-    "intellectual property", "patent", "patents", "copyright", "trademark",
-    "customs", "customs valuation",
-    "ban", "prohibition", "embargo", "import ban", "export ban",
-    "quota", "quotas", "quantitative restrictions",
-    "licensing", "import licensing", "export licensing",
-    "standards", "technical barriers", "sanitary", "phytosanitary",
-    "labelling", "marking", "packaging",
-    "procurement", "government procurement",
-    "investment measures", "local content",
-    "trade remedies", "zeroing",
-    "pricing", "minimum prices", "price controls",
-]
-
-
-def _detect_policy(text: str) -> tuple[bool, str]:
-    """Detect if text describes a systemic policy rather than specific products.
-
-    Returns (is_policy, policy_description).
-    A case can be BOTH product-specific AND policy-oriented
-    (e.g., "Anti-Dumping Measures on Steel" → product=steel, policy=anti-dumping).
-    """
-    if not text or text == "nan":
-        return False, ""
-
-    lower = text.lower()
-
-    # Check for policy keywords
-    matched_policies = []
-    for kw in POLICY_KEYWORDS:
-        if kw in lower:
-            matched_policies.append(kw)
-
-    if not matched_policies:
-        return False, ""
-
-    # Check if there are ALSO product keywords (hybrid case)
-    has_product = bool(_keyword_sections(text))
-
-    # If there are policy keywords but NO product keywords → purely systemic
-    # If both → hybrid (has product + policy)
-    # Either way, we record the policy
-    policy_desc = text.strip()
-
-    return True, policy_desc
-
-
-def _is_purely_systemic(text: str) -> bool:
-    """True if text describes ONLY a systemic policy with no identifiable product."""
-    if not text or text == "nan":
-        return False
-    is_policy, _ = _detect_policy(text)
-    if not is_policy:
-        return False
-    # Check if any product keywords exist
-    has_product = bool(_keyword_sections(text))
-    return not has_product
-
-
-# ── LLM classification prompts ───────────────────────────────
+# ── LLM classification prompt ────────────────────────────────
 
 _HS_SECTION_LIST = "\n".join(
-    f"Section {num}: {desc}" for num, desc in HS_SECTIONS.items() if num > 0
+    f"Section {num}: {desc}" for num, desc in HS_SECTIONS.items()
 )
 
 HS_CLASSIFICATION_PROMPT = ChatPromptTemplate.from_messages([
     ("system",
-     "You are an expert in the Harmonized System (HS) trade classification.\n\n"
-     "Given product descriptions from a WTO dispute, classify them into the appropriate "
-     "HS Sections (1-21). Here are the 21 sections:\n\n"
-     + _HS_SECTION_LIST +
-     "\n\nA dispute may involve multiple sections. Return all applicable sections. "
-     "If the products are too vague to classify, return the most likely section(s)."),
+     "You are an expert in the Harmonized System (HS) trade classification and WTO disputes.\n\n"
+     "Your task has TWO STEPS:\n\n"
+     "### STEP 1: Determine case type ###\n"
+     "Decide if this is a PRODUCT dispute or a POLICY dispute:\n"
+     "- PRODUCT: The dispute targets specific traded goods (e.g., steel, salmon, automobiles, "
+     "semiconductors). The measure may be anti-dumping duties, countervailing duties, safeguards, "
+     "or other measures, but they are applied to identifiable products.\n"
+     "- POLICY: The dispute challenges a law, regulation, methodology, or systemic measure "
+     "that does NOT target specific traded goods (e.g., customs valuation procedures, "
+     "IP regime, import licensing system, zeroing methodology).\n\n"
+     "### STEP 2: Classify into HS sections ###\n"
+     "Here are the 21 HS sections:\n" + _HS_SECTION_LIST + "\n\n"
+     "- For PRODUCT cases: identify the specific HS sections (1-21) the products fall under. "
+     "You MUST identify at least one specific section. Do NOT return all 21 unless the "
+     "products genuinely span all sectors.\n"
+     "- For POLICY cases: determine if the policy is HORIZONTAL (affects all sectors → all 21 sections) "
+     "or SECTOR-SPECIFIC (e.g., 'agricultural subsidies' → sections 1-4, "
+     "'anti-dumping on steel' → section 15). Use your judgment.\n\n"
+     "### OUTPUT ###\n"
+     "- case_type: 'product' or 'policy'\n"
+     "- sections: list of HS section numbers (1-21)\n"
+     "- reasoning: explain your classification decision\n"
+     "- policy_description: (only for policy cases) brief description of the policy/measure"),
     ("human",
-     "Product descriptions: {product_descriptions}\nCase title: {case_title}\n\n"
-     "Classify into HS sections."),
+     "Case: DS{case_id}\nCase title: {case_title}\n"
+     "Title product (from case title): {title_product}\n\n"
+     "RAG-extracted product descriptions: {product_descriptions}\n"
+     "Extraction notes: {notes}\n\n"
+     "Original document text:\n{context}\n\n"
+     "Classify this dispute."),
 ])
 
 TITLE_CLASSIFICATION_PROMPT = ChatPromptTemplate.from_messages([
     ("system",
      "You are an expert in the Harmonized System (HS) trade classification.\n\n"
-     "Given ONLY the product name from a WTO dispute case title, classify it into "
-     "the appropriate HS Sections (1-21). Here are the 21 sections:\n\n"
-     + _HS_SECTION_LIST +
-     "\n\nA dispute may involve multiple sections. Return all applicable sections. "
-     "If the product is too vague to classify, return the most likely section(s)."),
+     "Given ONLY the product name from a WTO dispute case title, classify it.\n\n"
+     "### STEP 1: Determine case type ###\n"
+     "- PRODUCT: Targets specific traded goods.\n"
+     "- POLICY: Challenges a law, regulation, or systemic measure.\n\n"
+     "### STEP 2: Classify into HS sections ###\n"
+     "Here are the 21 sections:\n" + _HS_SECTION_LIST + "\n\n"
+     "For product cases: return specific sections. "
+     "For policy cases: return all 21 if horizontal, or specific sectors if sector-specific.\n\n"
+     "Output: case_type, sections, reasoning, policy_description (if policy)."),
     ("human",
      "Product from case title: {title_product}\n\n"
-     "Classify into HS sections based ONLY on this product name."),
+     "Classify this dispute based ONLY on this product name."),
 ])
 
 
@@ -266,38 +188,26 @@ TITLE_CLASSIFICATION_PROMPT = ChatPromptTemplate.from_messages([
 def _classify_title_product(
     title_product: str,
     structured_llm,
-) -> str:
-    """Classify a title product into HS sections using LLM. Returns pipe-delimited sections.
+) -> tuple[str, str, str]:
+    """Classify a title product into HS sections using LLM.
 
-    If the title describes a purely systemic policy (no identifiable product),
-    returns ALL_SECTIONS_STR. Never returns empty — worst case returns ALL_SECTIONS_STR.
+    Returns (hs_sections_str, case_type, reasoning).
+    Never returns empty sections — worst case returns ALL_SECTIONS_STR.
     """
     if not title_product or title_product == "nan":
-        return ALL_SECTIONS_STR
+        return ALL_SECTIONS_STR, "policy", "No title product available"
 
-    # Try keyword match first (fast, no API call)
-    kw_sections = _keyword_sections(title_product)
-    if kw_sections:
-        return "|".join(str(s) for s in kw_sections)
-
-    # LLM classification
     try:
         result = structured_llm.invoke(
             TITLE_CLASSIFICATION_PROMPT.format_messages(title_product=title_product)
         )
         sections = sorted(set(s for s in result.sections if 1 <= s <= 21))
         if sections:
-            return "|".join(str(s) for s in sections)
+            return "|".join(str(s) for s in sections), result.case_type, result.reasoning
     except Exception as e:
         logger.warning("Title classification failed for '%s': %s", title_product, e)
 
-    # If LLM couldn't find specific sections, this is likely a systemic/policy case
-    if _is_purely_systemic(title_product):
-        return ALL_SECTIONS_STR
-
-    # Last resort: let LLM try one more time or assume all sections
-    # (better to over-include than to mark as 0)
-    return ALL_SECTIONS_STR
+    return ALL_SECTIONS_STR, "policy", "Classification failed — defaulting to all sections"
 
 
 # ── Main classification ──────────────────────────────────────
@@ -305,17 +215,17 @@ def _classify_title_product(
 def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Read industry_extraction.csv and classify into HS sections.
 
+    Two-step process per case:
+      1. Determine product vs policy (LLM decision, not keyword heuristic)
+      2. Classify into HS sections with reasoning
+
     Two independent classifications per case:
-      - title_hs_sections: LLM classifies from `product` column in wto_cases_v2.csv (ground truth)
-      - hs_sections: classifies from RAG-extracted product_descriptions
+      - title_hs_sections: from `product` column in wto_cases_v2.csv (ground truth)
+      - hs_sections: from RAG product_descriptions + retrieved context
 
-    Every case gets an HS section — no missing values:
-      - Specific products → sections 1-21
-      - Systemic/policy cases → all sections (1-21)
-      - No data → falls back to title classification
-
-    New columns:
-      - policy: describes the policy/measure for systemic cases (tax, subsidy, etc.)
+    Mutual exclusivity enforced:
+      - Product cases: product_descriptions populated, policy empty
+      - Policy cases: policy populated, product_descriptions cleared
 
     Returns:
         (case_hs_sections_df, case_section_expanded_df)
@@ -371,39 +281,22 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
         product = str(product_lookup.get(case_id, ""))  # Ground truth from title
         product_descriptions = str(row.get("product_descriptions", ""))
         explicit_codes_str = str(row.get("explicit_hs_codes", ""))
-        is_systemic = row.get("is_systemic", False)
-        is_services = row.get("is_services", False)
+        notes = str(row.get("notes", ""))
 
-        explicit_codes = [c.strip() for c in explicit_codes_str.split("|") if c.strip()]
-
-        # Policy column is populated ONLY for systemic cases (set later if needed)
-        policy = ""
+        explicit_codes = [
+            c.strip() for c in explicit_codes_str.split("|")
+            if c.strip() and c.strip().upper() != "NAN"
+        ]
 
         # ── Ground truth: classify from product column (title-derived) ──
-        # _classify_title_product never returns empty — worst case ALL_SECTIONS_STR
-        title_hs = _classify_title_product(product, structured_llm)
+        title_hs, title_case_type, title_reasoning = _classify_title_product(
+            product, structured_llm
+        )
         time.sleep(LLM_BATCH_PAUSE)
 
-        # ── RAG-based classification (from product_descriptions) ──
+        # ── RAG-based classification ──
 
-        # Systemic / services cases (from RAG flags) → all sections
-        if is_systemic or is_services:
-            policy = product if product != "nan" else case_title
-            results.append({
-                "case_id": case_id,
-                "case_title": case_title,
-                "product": product if product != "nan" else "",
-                "title_hs_sections": title_hs,
-                "hs_sections": ALL_SECTIONS_STR,
-                "product_descriptions": product_descriptions,
-                "policy": policy,
-                "extraction_method": "general",
-                "confidence": "high",
-                "reasoning": "Systemic measure" if is_systemic else "Services dispute",
-            })
-            continue
-
-        # Path A: explicit HS codes from RAG → deterministic lookup
+        # Path A: explicit HS codes → deterministic lookup (always product case)
         if explicit_codes:
             sections = _hs_code_to_sections(explicit_codes)
             if sections:
@@ -412,8 +305,10 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
                     "case_title": case_title,
                     "product": product if product != "nan" else "",
                     "title_hs_sections": title_hs,
+                    "title_case_type": title_case_type,
                     "hs_sections": "|".join(str(s) for s in sections),
-                    "product_descriptions": product_descriptions,
+                    "case_type": "product",
+                    "product_descriptions": product_descriptions if product_descriptions != "nan" else "",
                     "policy": "",
                     "extraction_method": "explicit_hs",
                     "confidence": "high",
@@ -421,98 +316,77 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
                 })
                 continue
 
-        # Path B: LLM classification from RAG product descriptions
-        if product_descriptions and product_descriptions != "nan":
-            try:
-                result = structured_llm.invoke(
-                    HS_CLASSIFICATION_PROMPT.format_messages(
-                        product_descriptions=product_descriptions,
-                        case_title=case_title,
-                    )
+        # Path B: LLM classification with full context
+        # Retrieve original documents for richer context
+        try:
+            query = f"Products and measures in WTO dispute DS{case_id}: {case_title}"
+            parent_texts = retrieve(query, case_id, task="industry_extraction")
+            context = "\n\n---\n\n".join(parent_texts) if parent_texts else "(No documents retrieved)"
+        except Exception as e:
+            logger.warning("Retrieval failed for DS%s: %s", case_id, e)
+            context = "(Retrieval failed)"
+
+        try:
+            result = structured_llm.invoke(
+                HS_CLASSIFICATION_PROMPT.format_messages(
+                    case_id=case_id,
+                    case_title=case_title,
+                    title_product=product if product != "nan" else "(none)",
+                    product_descriptions=product_descriptions if product_descriptions != "nan" else "(none)",
+                    notes=notes if notes != "nan" else "",
+                    context=context,
                 )
-                sections = sorted(set(s for s in result.sections if 1 <= s <= 21))
+            )
 
-                # Validate with keyword fallback
-                if not sections:
-                    sections = _keyword_sections(product_descriptions)
+            sections = sorted(set(s for s in result.sections if 1 <= s <= 21))
+            if not sections:
+                # LLM returned no valid sections — default to all
+                sections = list(range(1, 22))
+                logger.warning("DS%s: LLM returned no valid sections, defaulting to all", case_id)
 
-                # Still nothing → check if it's a systemic/policy case
-                if not sections:
-                    if _is_purely_systemic(product_descriptions) or _is_purely_systemic(product):
-                        policy = product if product != "nan" else case_title
-                        hs_str = ALL_SECTIONS_STR
-                        method = "general"
-                    else:
-                        hs_str = ALL_SECTIONS_STR  # Better to include all than mark unknown
-                        method = "llm_classification"
-                else:
-                    hs_str = "|".join(str(s) for s in sections)
-                    method = "llm_classification"
+            hs_str = "|".join(str(s) for s in sections)
+            case_type = result.case_type
 
-                results.append({
-                    "case_id": case_id,
-                    "case_title": case_title,
-                    "product": product if product != "nan" else "",
-                    "title_hs_sections": title_hs,
-                    "hs_sections": hs_str,
-                    "product_descriptions": product_descriptions,
-                    "policy": policy if method == "general" else "",
-                    "extraction_method": method,
-                    "confidence": "medium" if hs_str != ALL_SECTIONS_STR else "low",
-                    "reasoning": result.reasoning,
-                })
-                time.sleep(LLM_BATCH_PAUSE)
-
-            except Exception as e:
-                logger.error("LLM classification failed for DS%s: %s", case_id, e)
-                # Keyword fallback
-                sections = _keyword_sections(product_descriptions)
-                if sections:
-                    hs_str = "|".join(str(s) for s in sections)
-                    method = "keyword_fallback"
-                    policy = ""
-                elif _is_purely_systemic(product_descriptions) or _is_purely_systemic(product):
-                    hs_str = ALL_SECTIONS_STR
-                    method = "general"
-                    policy = product if product != "nan" else case_title
-                else:
-                    hs_str = ALL_SECTIONS_STR
-                    method = "keyword_fallback"
-                    policy = ""
-                results.append({
-                    "case_id": case_id,
-                    "case_title": case_title,
-                    "product": product if product != "nan" else "",
-                    "title_hs_sections": title_hs,
-                    "hs_sections": hs_str,
-                    "product_descriptions": product_descriptions,
-                    "policy": policy,
-                    "extraction_method": method,
-                    "confidence": "low",
-                    "reasoning": f"LLM failed, keyword match: {e}",
-                })
-        else:
-            # No product descriptions — check if title product is systemic
-            if _is_purely_systemic(product):
-                if not policy:
-                    policy = product if product != "nan" else case_title
-                hs_str = ALL_SECTIONS_STR
-                method = "general"
+            # Enforce mutual exclusivity
+            if case_type == "product":
+                out_product_desc = product_descriptions if product_descriptions != "nan" else ""
+                out_policy = ""
             else:
-                # No RAG data at all — use title_hs as best guess
-                hs_str = title_hs
-                method = "title_fallback"
+                out_product_desc = ""
+                out_policy = result.policy_description if result.policy_description else case_title
+
             results.append({
                 "case_id": case_id,
                 "case_title": case_title,
                 "product": product if product != "nan" else "",
                 "title_hs_sections": title_hs,
+                "title_case_type": title_case_type,
                 "hs_sections": hs_str,
-                "product_descriptions": "",
-                "policy": policy,
-                "extraction_method": method,
+                "case_type": case_type,
+                "product_descriptions": out_product_desc,
+                "policy": out_policy,
+                "extraction_method": "llm_classification",
+                "confidence": "high" if case_type == "product" and hs_str != ALL_SECTIONS_STR else "medium",
+                "reasoning": result.reasoning,
+            })
+            time.sleep(LLM_BATCH_PAUSE)
+
+        except Exception as e:
+            logger.error("LLM classification failed for DS%s: %s", case_id, e)
+            # Fallback: use title classification
+            results.append({
+                "case_id": case_id,
+                "case_title": case_title,
+                "product": product if product != "nan" else "",
+                "title_hs_sections": title_hs,
+                "title_case_type": title_case_type,
+                "hs_sections": title_hs,
+                "case_type": title_case_type,
+                "product_descriptions": product_descriptions if product_descriptions != "nan" else "",
+                "policy": "",
+                "extraction_method": "title_fallback",
                 "confidence": "low",
-                "reasoning": "No product descriptions — used title classification",
+                "reasoning": f"LLM failed ({e}), using title classification",
             })
 
         # Checkpoint
@@ -524,36 +398,41 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
     sections_df.to_csv(output_path, index=False)
     logger.info("Saved %d rows to %s", len(sections_df), output_path)
 
-    # Build expanded table (one row per case-section pair, ALL cases included)
+    # Build expanded table (one row per case-section pair)
     expanded_rows = []
     for _, row in sections_df.iterrows():
-        hs_str = str(row.get("hs_sections", "0"))
+        hs_str = str(row.get("hs_sections", ""))
         if not hs_str or hs_str == "nan":
-            hs_str = "0"
+            continue
         for sec in hs_str.split("|"):
             sec = sec.strip()
-            if sec:
-                expanded_rows.append({
-                    "case_id": row["case_id"],
-                    "hs_section": int(sec),
-                    "extraction_method": row["extraction_method"],
-                    "confidence": row["confidence"],
-                })
+            if sec and sec != "nan":
+                try:
+                    expanded_rows.append({
+                        "case_id": row["case_id"],
+                        "hs_section": int(sec),
+                        "case_type": row["case_type"],
+                        "extraction_method": row["extraction_method"],
+                        "confidence": row["confidence"],
+                    })
+                except ValueError:
+                    pass
 
     expanded_df = pd.DataFrame(expanded_rows)
     expanded_df.to_csv(expanded_path, index=False)
     logger.info("Saved %d rows to %s", len(expanded_df), expanded_path)
 
     # Print summary stats
+    n_product = (sections_df["case_type"] == "product").sum()
+    n_policy = (sections_df["case_type"] == "policy").sum()
     n_all_sections = (sections_df["hs_sections"] == ALL_SECTIONS_STR).sum()
-    n_section_0 = sections_df["hs_sections"].apply(lambda x: "0" in str(x).split("|") and len(str(x).split("|")) == 1).sum()
-    n_policy = (sections_df["policy"] != "").sum() if "policy" in sections_df.columns else 0
-    n_specific = len(sections_df) - n_all_sections - n_section_0
+    has_policy = (sections_df["policy"] != "").sum() if "policy" in sections_df.columns else 0
+    has_product_desc = (sections_df["product_descriptions"] != "").sum() if "product_descriptions" in sections_df.columns else 0
 
     logger.info(
-        "Classification breakdown: %d specific, %d all-sections (systemic/policy), "
-        "%d unknown (section 0), %d with policy column",
-        n_specific, n_all_sections, n_section_0, n_policy,
+        "Classification: %d product, %d policy | "
+        "%d all-sections | %d with product_descriptions, %d with policy",
+        n_product, n_policy, n_all_sections, has_product_desc, has_policy,
     )
 
     # Extraction method distribution

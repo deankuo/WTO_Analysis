@@ -29,6 +29,7 @@ def find_problems() -> dict:
         "empty_product_descriptions": [],
         "empty_hs_sections": [],
         "empty_title_hs": [],
+        "mutual_exclusivity_violation": [],
         "failed_severity": [],
     }
 
@@ -61,6 +62,16 @@ def find_problems() -> dict:
             (df["title_hs_sections"] == "nan")
         ]
         problems["empty_title_hs"] = empty_title["case_id"].tolist()
+
+        # Check mutual exclusivity: product_descriptions XOR policy
+        if "case_type" in df.columns:
+            for _, row in df.iterrows():
+                has_pd = bool(row.get("product_descriptions") and str(row["product_descriptions"]).strip() not in ("", "nan"))
+                has_policy = bool(row.get("policy") and str(row["policy"]).strip() not in ("", "nan"))
+                if has_pd and has_policy:
+                    problems["mutual_exclusivity_violation"].append(str(row["case_id"]))
+                elif not has_pd and not has_policy:
+                    problems["mutual_exclusivity_violation"].append(str(row["case_id"]))
 
     # Check severity_scores_raw.csv
     severity_path = os.path.join(OUTPUT_DIR, "severity_scores_raw.csv")
