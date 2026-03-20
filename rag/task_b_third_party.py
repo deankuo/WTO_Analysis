@@ -38,28 +38,31 @@ logger = logging.getLogger(__name__)
 
 THIRD_PARTY_PROMPT = ChatPromptTemplate.from_messages([
     ("system",
-     "You are an expert in WTO dispute settlement analyzing the political "
-     "engagement intensity of third party interventions.\n\n"
-     "A third party has requested to join consultations in a WTO dispute. "
-     "Score their intervention on three dimensions using a 1-3 scale. "
-     "Base your scores ONLY on the text provided.\n\n"
-     "DIMENSION 1 — Engagement Intensity:\n"
-     "1 = Formulaic: standard 'substantial trade interest' language only\n"
-     "2 = Moderate: specific reasons for interest, economic rationale stated\n"
-     "3 = Strong: emphatic language, urgency, direct trade impact emphasized\n\n"
-     "DIMENSION 2 — Stake Specificity:\n"
-     "1 = Generic: 'trade interest' with no specifics\n"
-     "2 = Moderate: mentions specific products, sectors, or trade relationships\n"
-     "3 = Detailed: quantified trade impact, specific tariff lines, market share data\n\n"
-     "DIMENSION 3 — Systemic Framing:\n"
-     "1 = Bilateral focus: only concerned with own trade interest\n"
-     "2 = Broader: references WTO obligations, precedent, or rule-making implications\n"
-     "3 = Systemic: frames as threat to multilateral trading system or fundamental principles\n\n"
-     "For each dimension, provide a brief evidence excerpt from the text."),
+     "You are an expert in WTO law and International Political Economy (IPE). "
+     "Analyze the following 'Request to Join Consultations' by a third party. "
+     "Your goal is to measure the 'Intensity of Interest' on a 1-5 scale.\n\n"
+
+     "### SCORING ANCHORS (Reference these as ground truth):\n"
+     "- LEVEL 1: DS109 (Peru joining US v Chile). Key: Formulaic, single sentence, no trade data, pure procedural notification.\n"
+     "- LEVEL 3: DS434 (Nicaragua joining Ukraine v Australia). Key: Mentions specific 'negative impact on production and employment'.\n"
+     "- LEVEL 5: DS27 (Saint Lucia joining Ecuador v EU). Key: Existential framing, 'economic collapse would seem inevitable', high trade-to-GDP stakes.\n\n"
+
+     "### DIMENSION: ENGAGEMENT INTENSITY (1-5)\n"
+     "1: Formulaic/Procedural. Uses only standard DSU Article 4.11 boilerplate. No justification provided beyond 'substantial trade interest'.\n"
+     "2: Minimalist. Identifies the specific product or sector but lacks data or narrative depth.\n"
+     "3: Substantive/Evidentiary. Provides specific reasons, mentions domestic industry impact, or provides preliminary trade data.\n"
+     "4: Strategic/Systemic. Links the dispute to broader policy concerns or offers specific legal interpretations of why the measure is harmful.\n"
+     "5: Existential/Urgent. High-stakes rhetoric. Claims the dispute affects national survival, key development goals, or threatens massive economic collapse.\n\n"
+
+     "### OUTPUT FORMAT ###\n"
+     "Return a JSON object with:\n"
+     "1. 'reasoning': A 2-sentence explanation of why this score was chosen (max 50 words).\n"
+     "2. 'evidence': The most telling phrase or sentence from the document.\n"
+     "3. 'score': The integer 1-5.\n"
+     "4. 'interest_type': Classify as either 'Systemic' (rule-focused) or 'Commercial' (market-access focused)."),
     ("human",
-     "Case: DS{case_id}\nThird party: {third_party}\n\n"
-     "Request to join consultations text:\n{context}\n\n"
-     "Score this third party's engagement."),
+     "Case: DS{case_id}\nThird Party: {third_party}\n\n"
+     "Document Text:\n{context}"),
 ])
 
 
@@ -106,12 +109,10 @@ def _score_one_third_party(
             return {
                 "case_id": case_id,
                 "third_party": third_party,
-                "engagement_intensity": None,
-                "engagement_evidence": "no_document",
-                "stake_specificity": None,
-                "stake_evidence": "",
-                "systemic_framing": None,
-                "systemic_evidence": "",
+                "engagement_score": None,
+                "reasoning": "no_document",
+                "evidence": "",
+                "interest_type": "",
                 "has_joining_request": False,
                 "n_parents_retrieved": 0,
             }
@@ -127,12 +128,10 @@ def _score_one_third_party(
         return {
             "case_id": case_id,
             "third_party": third_party,
-            "engagement_intensity": result.engagement_intensity,
-            "engagement_evidence": result.engagement_evidence,
-            "stake_specificity": result.stake_specificity,
-            "stake_evidence": result.stake_evidence,
-            "systemic_framing": result.systemic_framing,
-            "systemic_evidence": result.systemic_evidence,
+            "engagement_score": result.score,
+            "reasoning": result.reasoning,
+            "evidence": result.evidence,
+            "interest_type": result.interest_type,
             "has_joining_request": True,
             "n_parents_retrieved": len(relevant),
         }
@@ -142,12 +141,10 @@ def _score_one_third_party(
         return {
             "case_id": case_id,
             "third_party": third_party,
-            "engagement_intensity": None,
-            "engagement_evidence": f"ERROR: {e}",
-            "stake_specificity": None,
-            "stake_evidence": "",
-            "systemic_framing": None,
-            "systemic_evidence": "",
+            "engagement_score": None,
+            "reasoning": f"ERROR: {e}",
+            "evidence": "",
+            "interest_type": "",
             "has_joining_request": False,
             "n_parents_retrieved": 0,
         }

@@ -376,15 +376,8 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
 
         explicit_codes = [c.strip() for c in explicit_codes_str.split("|") if c.strip()]
 
-        # ── Detect policy from title product and RAG descriptions ──
-        title_is_policy, title_policy_desc = _detect_policy(product)
-        desc_is_policy, desc_policy_desc = _detect_policy(product_descriptions)
-        # Policy column: prefer RAG description, fallback to title product
+        # Policy column is populated ONLY for systemic cases (set later if needed)
         policy = ""
-        if desc_is_policy:
-            policy = desc_policy_desc
-        elif title_is_policy:
-            policy = title_policy_desc
 
         # ── Ground truth: classify from product column (title-derived) ──
         # _classify_title_product never returns empty — worst case ALL_SECTIONS_STR
@@ -395,8 +388,7 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
 
         # Systemic / services cases (from RAG flags) → all sections
         if is_systemic or is_services:
-            if not policy:
-                policy = product if product != "nan" else case_title
+            policy = product if product != "nan" else case_title
             results.append({
                 "case_id": case_id,
                 "case_title": case_title,
@@ -422,7 +414,7 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
                     "title_hs_sections": title_hs,
                     "hs_sections": "|".join(str(s) for s in sections),
                     "product_descriptions": product_descriptions,
-                    "policy": policy,
+                    "policy": "",
                     "extraction_method": "explicit_hs",
                     "confidence": "high",
                     "reasoning": f"Mapped from explicit codes: {', '.join(explicit_codes)}",
@@ -447,8 +439,7 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
                 # Still nothing → check if it's a systemic/policy case
                 if not sections:
                     if _is_purely_systemic(product_descriptions) or _is_purely_systemic(product):
-                        if not policy:
-                            policy = product if product != "nan" else case_title
+                        policy = product if product != "nan" else case_title
                         hs_str = ALL_SECTIONS_STR
                         method = "general"
                     else:
@@ -465,7 +456,7 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
                     "title_hs_sections": title_hs,
                     "hs_sections": hs_str,
                     "product_descriptions": product_descriptions,
-                    "policy": policy,
+                    "policy": policy if method == "general" else "",
                     "extraction_method": method,
                     "confidence": "medium" if hs_str != ALL_SECTIONS_STR else "low",
                     "reasoning": result.reasoning,
@@ -478,10 +469,16 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
                 sections = _keyword_sections(product_descriptions)
                 if sections:
                     hs_str = "|".join(str(s) for s in sections)
+                    method = "keyword_fallback"
+                    policy = ""
+                elif _is_purely_systemic(product_descriptions) or _is_purely_systemic(product):
+                    hs_str = ALL_SECTIONS_STR
+                    method = "general"
+                    policy = product if product != "nan" else case_title
                 else:
-                    hs_str = ALL_SECTIONS_STR  # Assume all rather than unknown
-                    if not policy:
-                        policy = product if product != "nan" else case_title
+                    hs_str = ALL_SECTIONS_STR
+                    method = "keyword_fallback"
+                    policy = ""
                 results.append({
                     "case_id": case_id,
                     "case_title": case_title,
@@ -490,7 +487,7 @@ def classify_all(resume: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
                     "hs_sections": hs_str,
                     "product_descriptions": product_descriptions,
                     "policy": policy,
-                    "extraction_method": "keyword_fallback",
+                    "extraction_method": method,
                     "confidence": "low",
                     "reasoning": f"LLM failed, keyword match: {e}",
                 })

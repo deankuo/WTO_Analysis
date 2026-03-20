@@ -25,16 +25,15 @@ logger = logging.getLogger(__name__)
 
 def _compute_z_scores(
     df: pd.DataFrame,
-    dims: list[str],
+    score_col: str,
     group_col: str,
     suffix: str,
 ) -> pd.DataFrame:
-    """Compute within-group z-scores for each dimension."""
-    for dim in dims:
-        col = f"{dim}_{suffix}"
-        df[col] = df.groupby(group_col)[dim].transform(
-            lambda x: (x - x.mean()) / x.std() if x.std() > 0 else 0.0
-        )
+    """Compute within-group z-score for a single score column."""
+    col = f"{score_col}_{suffix}"
+    df[col] = df.groupby(group_col)[score_col].transform(
+        lambda x: (x - x.mean()) / x.std() if x.std() > 0 else 0.0
+    )
     return df
 
 
@@ -42,9 +41,8 @@ def normalize_severity() -> pd.DataFrame | None:
     """Normalize complainant severity scores.
 
     Computes:
-      - composite (mean of 3 dimensions)
-      - within-complainant z-scores
-      - within-sector z-scores (if HS data available)
+      - within-complainant z-score on severity_score
+      - within-sector z-score (if HS data available)
 
     Returns normalized DataFrame, or None if raw scores not found.
     """
@@ -57,7 +55,7 @@ def normalize_severity() -> pd.DataFrame | None:
         return None
 
     raw_df = pd.read_csv(raw_path, dtype={"case_id": str})
-    df = raw_df.dropna(subset=["rhetorical_intensity", "core_principles", "escalation_signals"]).copy()
+    df = raw_df.dropna(subset=["severity_score"]).copy()
 
     if len(df) < len(raw_df):
         logger.warning("%d cases failed scoring — excluded from normalization", len(raw_df) - len(df))
@@ -68,22 +66,15 @@ def normalize_severity() -> pd.DataFrame | None:
 
     logger.info("Normalizing %d severity scores", len(df))
 
-    dims = ["rhetorical_intensity", "core_principles", "escalation_signals", "composite"]
-
-    # Composite score
-    df["composite"] = (
-        df["rhetorical_intensity"] + df["core_principles"] + df["escalation_signals"]
-    ) / 3.0
-
-    # Within-complainant z-scores
-    df = _compute_z_scores(df, dims, "complainant", "within_complainant_z")
+    # Within-complainant z-score
+    df = _compute_z_scores(df, "severity_score", "complainant", "within_complainant_z")
 
     # Within-sector z-scores (requires HS data)
     if os.path.exists(expanded_path):
         expanded = pd.read_csv(expanded_path, dtype={"case_id": str})
         first_section = expanded.drop_duplicates(subset="case_id", keep="first")
         df = df.merge(first_section[["case_id", "hs_section"]], on="case_id", how="left")
-        df = _compute_z_scores(df, dims, "hs_section", "within_sector_z")
+        df = _compute_z_scores(df, "severity_score", "hs_section", "within_sector_z")
         logger.info("Sector z-scores computed using %d HS sections", df["hs_section"].nunique())
     else:
         logger.warning("case_section_expanded.csv not found — skipping sector normalization")
@@ -94,12 +85,11 @@ def normalize_severity() -> pd.DataFrame | None:
 
 
 def normalize_third_party() -> pd.DataFrame | None:
-    """Normalize third party severity scores.
+    """Normalize third party engagement scores.
 
     Computes:
-      - composite (mean of 3 dimensions)
-      - within-third-party z-scores (grouped by third_party country)
-      - within-sector z-scores (if HS data available)
+      - within-third-party z-score on engagement_score
+      - within-sector z-score (if HS data available)
 
     Returns normalized DataFrame, or None if raw scores not found.
     """
@@ -112,8 +102,7 @@ def normalize_third_party() -> pd.DataFrame | None:
         return None
 
     raw_df = pd.read_csv(raw_path, dtype={"case_id": str})
-    score_cols = ["engagement_intensity", "stake_specificity", "systemic_framing"]
-    df = raw_df.dropna(subset=score_cols).copy()
+    df = raw_df.dropna(subset=["engagement_score"]).copy()
 
     if df.empty:
         logger.warning("No valid third party scores to normalize")
@@ -121,20 +110,15 @@ def normalize_third_party() -> pd.DataFrame | None:
 
     logger.info("Normalizing %d third party scores", len(df))
 
-    dims = score_cols + ["composite"]
-
-    # Composite
-    df["composite"] = df[score_cols].mean(axis=1)
-
-    # Within-third-party z-scores
-    df = _compute_z_scores(df, dims, "third_party", "within_third_party_z")
+    # Within-third-party z-score
+    df = _compute_z_scores(df, "engagement_score", "third_party", "within_third_party_z")
 
     # Within-sector z-scores
     if os.path.exists(expanded_path):
         expanded = pd.read_csv(expanded_path, dtype={"case_id": str})
         first_section = expanded.drop_duplicates(subset="case_id", keep="first")
         df = df.merge(first_section[["case_id", "hs_section"]], on="case_id", how="left")
-        df = _compute_z_scores(df, dims, "hs_section", "within_sector_z")
+        df = _compute_z_scores(df, "engagement_score", "hs_section", "within_sector_z")
     else:
         logger.warning("case_section_expanded.csv not found — skipping sector normalization")
 

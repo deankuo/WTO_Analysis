@@ -66,7 +66,7 @@ def find_problems() -> dict:
     severity_path = os.path.join(OUTPUT_DIR, "severity_scores_raw.csv")
     if os.path.exists(severity_path):
         df = pd.read_csv(severity_path, dtype={"case_id": str})
-        failed = df[df["rhetorical_intensity"].isna()]
+        failed = df[df["severity_score"].isna()]
         problems["failed_severity"] = failed["case_id"].tolist()
 
     return problems

@@ -68,68 +68,49 @@ class HSClassification(BaseModel):
 # ── Task B: Severity Scoring ──────────────────────────────────
 
 class SeverityScore(BaseModel):
-    """Severity scoring for a WTO dispute consultation request."""
+    """Complainant severity scoring (1-5 scale)."""
 
-    rhetorical_intensity: int = Field(
-        ge=1, le=3,
-        description="1=neutral/hedged language, 2=direct/assertive, 3=aggressive/strong",
+    score: int = Field(
+        ge=1, le=5,
+        description=(
+            "1=Procedural/hedged (e.g., DS3), "
+            "2=Formal/technical, "
+            "3=Assertive with data/losses (e.g., DS267), "
+            "4=Strong systemic impairment claims, "
+            "5=Aggressive/geopolitical confrontation (e.g., DS574)"
+        ),
     )
-    rhetorical_evidence: str = Field(
-        description="Quote or paraphrase the specific language that justifies the score (max 100 words).",
+    reasoning: str = Field(
+        description="2-sentence explanation of why this score was chosen (max 50 words).",
     )
-    core_principles: int = Field(
-        ge=1, le=3,
-        description="1=narrow provisions only, 2=broad WTO principles (MFN, NT), 3=frames as systemic threat",
-    )
-    core_principles_evidence: str = Field(
-        description="List the specific principles or provisions invoked (max 100 words).",
-    )
-    escalation_signals: int = Field(
-        ge=1, le=3,
-        description="1=routine request, 2=references prior failures/patterns, 3=implies retaliation or all remedies",
-    )
-    escalation_evidence: str = Field(
-        description="Quote or paraphrase escalation language if present (max 100 words).",
+    evidence: str = Field(
+        description="Direct quote from the text that best supports the score.",
     )
 
 
-# ── Task B: Third Party Severity ──────────────────────────────
+# ── Task B: Third Party Engagement ───────────────────────────
 
 class ThirdPartyScore(BaseModel):
-    """Severity scoring for a third party's interest in a WTO dispute."""
+    """Third party engagement scoring (1-5 scale)."""
 
-    engagement_intensity: int = Field(
-        ge=1, le=3,
+    score: int = Field(
+        ge=1, le=5,
         description=(
-            "1=Routine/formulaic request ('substantial trade interest'), "
-            "2=Specific interest stated with economic rationale, "
-            "3=Strong language emphasizing systemic concerns or direct trade impact"
+            "1=Formulaic/procedural (e.g., DS109), "
+            "2=Minimalist with sector identification, "
+            "3=Substantive/evidentiary (e.g., DS434), "
+            "4=Strategic/systemic policy concerns, "
+            "5=Existential/urgent rhetoric (e.g., DS27)"
         ),
     )
-    engagement_evidence: str = Field(
-        description="Quote or paraphrase the specific language justifying the score (max 100 words).",
+    reasoning: str = Field(
+        description="2-sentence explanation of why this score was chosen (max 50 words).",
     )
-    stake_specificity: int = Field(
-        ge=1, le=3,
-        description=(
-            "1=Generic claim of trade interest, no specifics, "
-            "2=Mentions specific products, trade volumes, or affected industries, "
-            "3=Detailed economic stakes with quantified trade impact"
-        ),
+    evidence: str = Field(
+        description="The most telling phrase or sentence from the document.",
     )
-    stake_evidence: str = Field(
-        description="Quote or paraphrase the specificity of interest (max 100 words).",
-    )
-    systemic_framing: int = Field(
-        ge=1, le=3,
-        description=(
-            "1=Focused on bilateral interest only, "
-            "2=References broader WTO obligations or precedent concerns, "
-            "3=Frames as threat to multilateral system or core WTO principles"
-        ),
-    )
-    systemic_evidence: str = Field(
-        description="Quote or paraphrase any systemic framing language (max 100 words).",
+    interest_type: str = Field(
+        description="Classify as either 'Systemic' (rule-focused) or 'Commercial' (market-access focused).",
     )
 
 

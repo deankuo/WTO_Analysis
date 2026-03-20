@@ -35,29 +35,27 @@ logger = logging.getLogger(__name__)
 
 SEVERITY_PROMPT = ChatPromptTemplate.from_messages([
     ("system",
-     "You are an expert in WTO dispute settlement analyzing the political "
-     "framing intensity of consultation requests.\n\n"
-     "Score the following consultation request on three dimensions. Each dimension uses "
-     "a 1-3 scale. Base your scores ONLY on the text provided — do not use external "
-     "knowledge about the dispute's outcome or importance.\n\n"
-     "DIMENSION 1 — Rhetorical Intensity:\n"
-     "1 = Neutral: 'appears to be inconsistent with', 'may not be in conformity'\n"
-     "2 = Moderate: 'is inconsistent with', 'fails to conform to'\n"
-     "3 = Strong: 'violates', 'nullifies or impairs', 'severely undermines'\n\n"
-     "DIMENSION 2 — Invocation of Core Principles:\n"
-     "1 = Only narrow, specific provisions cited (e.g., Art. 2.1 AD Agreement)\n"
-     "2 = Broad WTO principles invoked (GATT Art. I MFN, Art. III National Treatment)\n"
-     "3 = Frames as threat to multilateral trading system or fundamental WTO principles\n\n"
-     "DIMENSION 3 — Escalation Signals:\n"
-     "1 = Routine consultation request, no escalation language\n"
-     "2 = References prior failed negotiations or mentions a pattern of measures\n"
-     "3 = Implies retaliation, suspension of concessions, or 'all available remedies'\n\n"
-     "For each dimension, provide a brief evidence excerpt from the text that justifies "
-     "your score. Be specific — cite actual phrases from the document."),
-    ("human",
-     "Case: DS{case_id}\nComplainant: {complainant}\n\n"
-     "Consultation request text:\n{context}\n\n"
-     "Score this consultation request on the three dimensions."),
+     "You are an expert in WTO dispute settlement. Score the following document on a 1-5 scale "
+     "of political framing and severity.\n\n"
+     
+     "### SCORING ANCHORS (Reference these as ground truth):\n"
+     "- LEVEL 1: DS3 (US v S. Korea). Key: Purely hedged boilerplate, neutral tone.\n"
+     "- LEVEL 3: DS267 (Brazil v US). Key: Assertive, data-heavy, mentions specific losses (e.g., $600M+).\n"
+     "- LEVEL 5: DS574 (Venezuela v US). Key: Geopolitical framing, uses words like 'coercive', 'isolate'.\n\n"
+     
+     "### DIMENSION: COMPLAINANT SEVERITY (1-5)\n"
+     "1: Procedural/Hedged. 'Appears to be inconsistent with...'\n"
+     "2: Formal/Technical. Standard legal claims without emphasis.\n"
+     "3: Assertive. Uses stronger verbs, cites economic data/losses.\n"
+     "4: Strong. Claims systemic impairment or broad domestic damage.\n"
+     "5: Aggressive. Confrontational, geopolitical framing, inflammatory language.\n\n"
+     
+     "### OUTPUT FORMAT ###\n"
+     "Return a JSON object with:\n"
+     "1. 'reasoning': A 2-sentence explanation of why this score was chosen.\n"
+     "2. 'evidence': A direct quote from the text.\n"
+     "3. 'score': The integer 1-5."),
+    ("human", "Case: DS{case_id}\nComplainant: {complainant}\n\nDocument Text:\n{context}")
 ])
 
 
@@ -106,12 +104,9 @@ def _score_one_case(case_id: str, case_title: str, complainant: str, structured_
         return {
             "case_id": case_id,
             "complainant": complainant,
-            "rhetorical_intensity": result.rhetorical_intensity,
-            "rhetorical_evidence": result.rhetorical_evidence,
-            "core_principles": result.core_principles,
-            "core_principles_evidence": result.core_principles_evidence,
-            "escalation_signals": result.escalation_signals,
-            "escalation_evidence": result.escalation_evidence,
+            "severity_score": result.score,
+            "reasoning": result.reasoning,
+            "evidence": result.evidence,
             "n_parents_retrieved": len(parent_texts),
         }
 
@@ -120,12 +115,9 @@ def _score_one_case(case_id: str, case_title: str, complainant: str, structured_
         return {
             "case_id": case_id,
             "complainant": complainant,
-            "rhetorical_intensity": None,
-            "rhetorical_evidence": f"ERROR: {e}",
-            "core_principles": None,
-            "core_principles_evidence": "",
-            "escalation_signals": None,
-            "escalation_evidence": "",
+            "severity_score": None,
+            "reasoning": f"ERROR: {e}",
+            "evidence": "",
             "n_parents_retrieved": 0,
         }
 
