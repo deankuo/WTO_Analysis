@@ -1,0 +1,27 @@
+---
+title: "ERGM"
+author: "Peng-Ting Kuo"
+format: pdf
+editor: visual
+---
+
+# Setup
+
+```{r Packages}
+library(network)
+library(ergm)
+library(devtools)
+```
+
+# ERGM
+
+```{r Network Analysis}
+# Example: Create a network object from an adjacency matrix
+# Replace 'my_matrix' with your actual adjacency matrix
+my_network <- network(my_matrix, directed = FALSE)
+
+# Example: Use a sample network included in the package (e.g., the Florentine marriage network)
+data(florentine)
+flomarriage # View basic information about the network
+
+```

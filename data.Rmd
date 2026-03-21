@@ -1,0 +1,177 @@
+---
+title: "Data"
+author: "Dean Peng-Ting Kuo"
+output: pdf
+---
+
+```{r setup}
+library(pwt10)
+library(WDI)
+library(vdemdata)
+library(dplyr)
+library(countrycode)
+library(haven)
+library(imfweo)
+library(imfapi)
+library(democracyData)
+```
+
+```{r WDI}
+# Indicators
+my_indicators <- c(
+  # --- Economy & Population ---
+  "gdp"               = "NY.GDP.MKTP.KD",        # Real GDP
+  "gdppc"             = "NY.GDP.PCAP.KD",        # GDP per capita
+  "pop"               = "SP.POP.TOTL",           # total population
+  "gdp_growth_rate"   = "NY.GDP.MKTP.KD.ZG",     # GDP growth rate (0-1)
+  "unemployment_rate" = "SL.UEM.TOTL.NE.ZS",     # Unemployment rate (0-1)
+  
+  # --- Trade and Investment ---
+  "trade"             = "NE.TRD.GNFS.ZS",        # ratio of trade in GDP (0-1)
+  "fdi"               = "BX.KLT.DINV.WD.GD.ZS",  # ratio of FDI in GDP (0-1)
+  "fdi_inflow_usd"    = "BX.KLT.DINV.CD.WD",     # Inflow of FDI (billion)
+  "exp_share"         = "NE.EXP.GNFS.ZS",        # share of export to GDP (0-1)
+  "imp_share"         = "NE.IMP.GNFS.ZS",        # share of import to GDP (0-1)
+
+  # --- Social ---
+  # Missing years: 1995, 1997, 1999, 2001
+  "voice"             = "VA.EST",                # Voice and Accountability (-2 - 2.5)
+  "stability"         = "PV.EST",                # Political Stability (-2 - 2.5)
+  "efficiency"        = "GE.EST",                # Government Effectiveness (-2 - 2.5)
+  "reg_quality"       = "RQ.EST",                # Regulatory Quality (-2 - 2.5)
+  "law"               = "RL.EST",                # Rule of Laws (-2 - 2.5)
+  "corruption"        = "CC.EST"                 # Corruption (-2 - 2.5)
+)
+
+# from 1995-2024
+df_wdi <- WDI(
+  indicator = my_indicators, 
+  country = "all", 
+  start = 1995, 
+  end = 2024,
+  extra = TRUE # iso3c
+)
+
+df_wdi_clean <- df_wdi %>%
+  mutate(
+    gdp = gdp / 1e6,                                  # turn to million
+    fdi_inflow_usd = fdi_inflow_usd / 1e6,            # turn to million
+    gdp_growth_rate = gdp_growth_rate / 100,          # turn to ratio
+    trade = trade / 100,                              # turn to ratio
+    exp_share = exp_share / 100,                      # turn to ratio
+    imp_share = imp_share / 100,                      # turn to ratio
+    unemployment_rate = unemployment_rate / 100,      # turn to ratio
+    log_gdppc = log(gdppc),                           # turn to log
+    log_pop = log(pop)) %>%                           # turn to log
+    
+    #filter out agrregate data 
+    filter(region != "Aggregates") %>%     
+    select(-c(iso2c, status, lastupdated, capital, lending))
+```
+
+```{r Taiwan}
+# Taiwan FDI from: https://unctad.org/news/explore-global-investment-data-and-changing-trends
+# Taiwan WGI 6 indicators: https://www.worldbank.org/en/publication/worldwide-governance-indicators/interactive-data-access
+# Taiwan ecnomic indicators: https://nstatdb.dgbas.gov.tw/dgbasall/webMain.aspx?k=dgmain&mode=1
+# ==== Now processing Taiwan data ====
+# Missing year：1995, 1997, 1999, 2001
+wgi <- readxl::read_excel("wgi.xlsx")
+# 1. Voice and Accountability
+voice <- c(NA, 0.7465, NA, 0.8155, NA, 0.8814, NA, 0.9334, 0.9306, 0.8351, 0.8836, 0.8606, 0.8450, 0.8505, 0.8759, 0.8909, 0.9008, 0.8832, 0.9189, 0.9209, 0.9297, 0.9893, 1.0332, 0.9880, 1.0227, 1.0704, 1.0375, 1.0382, 1.0271, 1.0229)
+
+# 2. Political Stability and Absence of Violence
+stability <- c(NA, 1.1161, NA, 1.0594, NA, 0.7648, NA, 0.9042, 0.8211, 0.6718, 0.9363, 0.8039, 0.7081, 0.9422, 0.8473, 1.0424, 1.0207, 1.0423, 0.9791, 0.9366, 1.0740, 1.0323, 1.0259, 1.0213, 1.0164, 1.0701, 1.0569, 1.0312, 1.0434, 0.9167)
+
+# 3. Government Effectiveness
+efficiency <- c(NA, 0.9489, NA, 0.8599, NA, 0.9483, NA, 0.9515, 1.0403, 1.1110, 1.1758, 1.0726, 1.0688, 1.0995, 1.1791, 1.2393, 1.2664, 1.3078, 1.2675, 1.3550, 1.3687, 1.3583, 1.2823, 1.4392, 1.5089, 1.5585, 1.4562, 1.4778, 1.5219, 1.4952)
+
+# 4. Regulatory Quality
+reg_quality <- c(NA, 0.6664, NA, 0.9645, NA, 1.0059, NA, 1.0888, 1.0748, 1.3629, 1.2856, 1.1831, 1.1847, 1.1899, 1.0918, 1.1750, 1.2078, 1.2319, 1.1881, 1.2542, 1.3226, 1.2847, 1.2754, 1.2549, 1.3022, 1.2703, 1.3411, 1.2984, 1.2824, 1.2955)
+
+# 5. Rule of Law
+law <- c(NA, 0.8434, NA, 0.7421, NA, 0.8652, NA, 0.8572, 0.8890, 0.9976, 1.1036, 0.9506, 0.9642, 0.9740, 0.9165, 1.0005, 1.0418, 1.0577, 1.0544, 1.0764, 1.1140, 1.1007, 1.0590, 1.1331, 1.1921, 1.2881, 1.2993, 1.2589, 1.2768, 1.2881)
+
+# 6. Control of Corruption
+corruption <- c(NA, 0.7674, NA, 0.6533, NA, 0.6073, NA, 0.8604, 0.8759, 0.9644, 1.0169, 0.6504, 0.5777, 0.5925, 0.5902, 0.8031, 0.8358, 0.7977, 0.7589, 0.9601, 0.9491, 1.0425, 1.1135, 1.1111, 1.1521, 1.2221, 1.2312, 1.1923, 1.1917, 1.1830)
+
+df_taiwan <- read.csv("taiwan_comprehensive.csv")
+df_taiwan <- df_taiwan %>%
+  mutate(
+    country = "Taiwan",
+    log_gdppc = log(gdppc), 
+    log_pop = log(pop),
+    cowcode = 713,
+    iso3c = "TAW",
+    region = "East Asia & Pacific",
+    income = "High income",
+    longtitude = 23.6978,
+    latitude = 120.9605,
+    unemployment_rate = unemployment_rate / 100,
+    gdp_growth_rate = gdp_growth_rate / 100,
+    voice = voice,
+    stability = stability,
+    efficiency = efficiency, 
+    reg_quality = reg_quality, 
+    law = law, 
+    corruption = corruption,
+    longitude = longtitude
+  ) %>%
+  select(country, iso3c, year, gdp, gdppc, pop, gdp_growth_rate, trade, fdi, fdi_inflow_usd, exp_share, imp_share, unemployment_rate,  voice, stability, efficiency, reg_quality, law, corruption, region, longitude, latitude, income, log_gdppc, log_pop)
+
+df_wdi_clean <- rbind(df_wdi_clean, df_taiwan)
+
+df_wdi_clean <- df_wdi_clean %>%
+  # 1. arrange
+  arrange(iso3c, year) %>%
+  group_by(iso3c) %>%
+  # 2. Imputation
+  mutate(across(c(voice, stability, efficiency, reg_quality, law, corruption), ~ {
+    val <- .         
+    yr <- year        
+    
+    # Case A: 1995 (Forward Fill)
+    val[yr == 1995] <- ifelse(is.na(val[yr == 1995]), val[yr == 1996], val[yr == 1995])
+    
+    # Case B: 1997, 1999, 2001 (Linear Interpolation)
+    target_years <- c(1997, 1999, 2001)
+    
+    for (y in target_years) {
+      prev_val <- val[yr == y - 1]
+      next_val <- val[yr == y + 1]
+      
+      if (length(prev_val) > 0 && length(next_val) > 0) {
+        interp_val <- (prev_val + next_val) / 2
+        val[yr == y] <- ifelse(is.na(val[yr == y]), interp_val, val[yr == y])
+      }
+    }
+    return(val)
+  })) %>%
+  ungroup()
+
+
+readr::write_csv(df_wdi_clean, file = "wdi.csv")
+
+read.csv("wdi.csv")
+```
+
+```{r V-Dem}
+# V-Dem (v15)
+df_vdem_clean <- vdem %>%
+  filter(year >= 1995) %>%
+  select(
+    cowcode = COWcode, # cow code
+    year,
+    v2x_libdem,        # Liberal Freedom
+    v2x_polyarchy,     # Electoral democracy
+    v2x_regime         # 0 = Autocracy, 3 = Democracy
+  )
+```
+
+```{r DPI}
+# Database of Political Institution
+df_dpi <- readxl::read_excel("DPI2020 Changes_FINAL.xlsx")
+```
+
+```{r}
+
+```

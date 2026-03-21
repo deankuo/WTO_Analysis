@@ -5,6 +5,7 @@ Result/
 *.json
 *.csv
 Output/
+WTO.Rproj
 
 # Database
 chroma_db_1000/
