@@ -362,11 +362,14 @@ def fix_eun_desta(trade_df, eu_mem_df):
 
 def build_eun_node_attrs(meta_df, eu_mem_df):
     """
-    EUN has NaN for gdp, pop, V-Dem, etc.
-    Aggregate from individual EU member states:
-      - sum: gdp (kept as gdppc*pop approx), pop
-      - average (GDP-weighted where possible): other numeric cols
-    Returns a DataFrame with iso3c='EUN' and year, ready to merge.
+    Aggregate numeric attributes (gdppc, pop, V-Dem, etc.) for EUN from individual
+    EU member states.  WTO participation columns (complainant/respondent/cum_*) are
+    intentionally NOT computed here — they come from the existing EUN rows in
+    country_meta (which correctly track EU's collective WTO filings under
+    "European Communities" / "European Union").
+      - sum: pop
+      - average (GDP-weighted): all other eligible numeric cols
+    Returns a DataFrame with iso3c='EUN' and year, used to fill NaN cols in patching step.
     """
     print("[Step 4b] Aggregating EUN node attributes from member states ...")
 
@@ -375,8 +378,16 @@ def build_eun_node_attrs(meta_df, eu_mem_df):
     num_cols = meta_df[all_keep].select_dtypes(include="number").columns.tolist()
     num_cols = [c for c in num_cols if c not in {"ccode","year","COWcode"}]
 
-    sum_cols = ["pop"]          # sum across EU members
-    avg_cols = [c for c in num_cols if c not in sum_cols and c != "pop"]
+    # Columns to skip: WTO participation data comes from existing EUN rows in
+    # country_meta (correct collective EU cases) — don't aggregate from member states.
+    skip_cols = {"complainant", "respondent", "third_party", "wto_participant",
+                 "cum_complainant", "cum_respondent", "cum_third_party",
+                 "wto_member", "wto_accession_year",
+                 "eu_member", "euro_join_year", "euro_member"}
+
+    sum_cols = ["pop"]   # sum across EU members
+    avg_cols = [c for c in num_cols
+                if c not in skip_cols and c not in sum_cols and c != "pop"]
 
     eu_by_year = eu_mem_df[eu_mem_df["eu_member"]==1].groupby("year")["iso3c"].apply(set)
 
@@ -464,10 +475,30 @@ def build_ergm_eun(dyadic_enriched, annual_counts, tp_covariates, eun_node_attrs
     keep_cols = [c for c in meta.columns if c not in META_EXCLUDE]
     meta = meta[keep_cols].copy()
 
-    # Patch EUN node attributes
-    eun_existing = meta[meta["iso3c"]=="EUN"].index
-    meta = meta.drop(index=eun_existing)
-    meta = pd.concat([meta, eun_node_attrs.reindex(columns=keep_cols)], ignore_index=True)
+    # Patch EUN node attributes:
+    # Keep existing EUN rows (correct WTO participation, complainant/respondent/cum_* data).
+    # Fill only NaN columns (gdppc, pop, V-Dem, etc.) from member-state aggregated attrs.
+    # Hard-override EU identity columns that are wrong (0/NaN) in the source data.
+    eun_existing_df = meta[meta["iso3c"]=="EUN"].copy()
+    meta = meta[meta["iso3c"]!="EUN"].copy()
+
+    agg_fill_cols = [c for c in eun_node_attrs.columns if c not in ("iso3c","year")]
+    eun_merged = eun_existing_df.merge(
+        eun_node_attrs[["year"] + agg_fill_cols],
+        on="year", how="left", suffixes=("","_agg")
+    )
+    for col in agg_fill_cols:
+        agg_col = f"{col}_agg"
+        if agg_col in eun_merged.columns:
+            eun_merged[col] = eun_merged[col].fillna(eun_merged[agg_col])
+            eun_merged = eun_merged.drop(columns=[agg_col])
+
+    # Hard overrides regardless of existing values
+    eun_merged["eu_member"]      = 1
+    eun_merged["euro_join_year"] = 1999
+    eun_merged["euro_member"]    = (eun_merged["year"] >= 1999).astype(int)
+
+    meta = pd.concat([meta, eun_merged], ignore_index=True)
 
     # Merge annual counts into meta
     meta = meta.merge(annual_counts, on=["iso3c","year"], how="left")

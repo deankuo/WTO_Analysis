@@ -162,7 +162,7 @@ def extract_year(date_str):
 # ──────────────────────────────────────────────────────────────────────────────
 
 # ── wto_cases ──
-cases_df = pd.read_csv(f"{BASE}/wto_cases.csv")
+cases_df = pd.read_csv(f"{BASE}/wto_cases_v2.csv")
 cases_df["year"] = cases_df["consultations_requested"].apply(extract_year)
 
 def normalise_cases_name(raw):
@@ -177,9 +177,9 @@ for _, row in cases_df.iterrows():
     yr = row["year"]
     if yr is None or yr < 1995 or yr > 2024:
         continue
-    for raw in parse_list_col(row["Complainant"]):
+    for raw in parse_list_col(row["complainant"]):
         case_records.append((yr, normalise_cases_name(raw), "complainant"))
-    for raw in parse_list_col(row["Respondent"]):
+    for raw in parse_list_col(row["respondent"]):
         case_records.append((yr, normalise_cases_name(raw), "respondent"))
     for raw in parse_list_col(row["third_parties"]):
         case_records.append((yr, normalise_cases_name(raw), "third_party"))
@@ -291,11 +291,19 @@ panel = panel.sort_values(["country", "year"])
 _yr = (panel["complainant"] | panel["respondent"] | panel["third_party"]).astype(int)
 panel["wto_participant"] = _yr.groupby(panel["country"]).cummax().astype(int)
 
-# Cumulative case counts per role
-grp = panel.groupby("country")
-panel["cum_complainant"] = grp["complainant"].cumsum().astype(int)
-panel["cum_respondent"]  = grp["respondent"].cumsum().astype(int)
-panel["cum_third_party"] = grp["third_party"].cumsum().astype(int)
+# Cumulative case counts per role — actual number of cases filed each year,
+# not binary "was active this year". roles_df has one row per (case, country, role).
+for _role, _cum in [("complainant", "cum_complainant"),
+                    ("respondent",  "cum_respondent"),
+                    ("third_party", "cum_third_party")]:
+    _n_col = f"_n_{_role}"
+    _yr_counts = (roles_df[roles_df["role"] == _role]
+                  .groupby(["year", "country"]).size()
+                  .reset_index(name=_n_col))
+    panel = panel.merge(_yr_counts, on=["country", "year"], how="left")
+    panel[_n_col] = panel[_n_col].fillna(0).astype(int)
+    panel[_cum] = panel.groupby("country")[_n_col].cumsum().astype(int)
+    panel = panel.drop(columns=[_n_col])
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 9.  eu_member / euro_join_year / euro_member
