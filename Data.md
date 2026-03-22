@@ -1,7 +1,7 @@
 # Dataset Documentation — WTO Dispute Analysis
 
 **Last Updated:** March 2026
-**Maintainer:** Dean Kuo
+**Maintainer:** Peng-Ting Kuo
 
 ---
 
@@ -87,9 +87,9 @@ The dataset integrates seven major data sources into a balanced country-year pan
 | `respondent` | Country was respondent in at least one dispute in that year | Binary (0/1) |
 | `third_party` | Country joined as third party in at least one dispute in that year | Binary (0/1) |
 | `wto_participant` | Any WTO dispute activity (complainant OR respondent OR third party) | Binary (0/1) |
-| `cum_complainant` | Cumulative number of disputes initiated (1995–that year) | Integer; 0–25 |
-| `cum_respondent` | Cumulative number of disputes faced as respondent | Integer; 0–29 |
-| `cum_third_party` | Cumulative number of third-party appearances | Integer; 0–30 |
+| `cum_complainant` | Cumulative number of distinct WTO cases initiated as complainant (1995–that year) | Integer; 0–124 (USA) |
+| `cum_respondent` | Cumulative number of distinct WTO cases faced as respondent (1995–that year) | Integer; 0–158 (USA) |
+| `cum_third_party` | Cumulative number of distinct WTO cases joined as third party (1995–that year) | Integer; 0–234 (JPN) |
 
 ---
 
@@ -708,8 +708,9 @@ WGI surveys were not conducted annually before 2002:
 ### 5.3 WTO Participation Variables
 
 - `complainant`, `respondent`, `third_party` are binary indicators constructed from `wto_cases_v2.csv` (644 cases DS1–DS644): 1 if the country participated in at least one dispute of that type in that year, 0 otherwise.
-- `cum_complainant`, `cum_respondent`, `cum_third_party` are cumulative counts from 1995 through year t (inclusive).
+- `cum_complainant`, `cum_respondent`, `cum_third_party` count the **cumulative number of distinct cases** (not years-with-activity) from 1995 through year t inclusive. If a country filed 3 cases in one year, the cumulative count rises by 3 that year. Computed from `wto_dyadic_v2.csv` using `nunique(case_id)` per (country, year, role) before cumsum. Updated March 2026.
 - The EU is treated as a single litigation actor (`EUN`). Individual EU member states may also appear separately in early cases (see Section 5.7).
+- **EUN participation data:** EUN's `complainant`, `respondent`, `cum_*` etc. are sourced directly from its own rows in `country_meta` (which correctly record EU's collective WTO filings under "European Communities"/"European Union"), not aggregated from individual member states. EUN's `eu_member`, `euro_join_year`, `euro_member` are hard-overridden to 1, 1999, and `(year≥1999)` respectively at the ERGM build step (not in the CSV, where EUN has no meaningful EU-membership-of-itself value).
 - **ERGM note:** For the ERGM datasets, annual activity counts (`n_complainant_t`, `n_respondent_t`, `n_tp_t`) are computed directly from `wto_dyadic_v2.csv` and merged alongside the cumulative `cum_*` variables. The annual counts capture how many distinct cases a country was involved in that specific year.
 
 ### 5.4 V-Dem Election Variables

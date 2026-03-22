@@ -16,7 +16,7 @@ Design notes
 - Outcome: has_dispute = 1 when exporter filed complaint against importer in year t
 - dyadic_severity: CR->case score; TP-R->0.5 placeholder; C-TP->0
 - Multiple cases per dyad-year: _max (most severe) and _avg (average) versions
-- Trade lags t-1/t-2/t-3; backward imputation: 1995->NaN, 1996->t-2=t-3=t-1, 1997->t-3=t-2
+- Trade lags t-1/t-2/t-3 for trade vars only (ATOP/DESTA kept contemporaneous); backward imputation: 1995->NaN, 1996->t-2=t-3=t-1, 1997->t-3=t-2
 - Node attributes: contemporaneous (year t), 44 cols from country_meta, suffixed _1/_2
 - Annual WTO counts: n_complainant_t, n_respondent_t, n_tp_t per country-year
 - EUN DESTA fix: inherit from EU member state agreements; EUN ATOP=0 by design
@@ -556,10 +556,9 @@ def build_ergm_eun(dyadic_enriched, annual_counts, tp_covariates, eun_node_attrs
                     dispute_agg.at[idx, col] = 1
 
     # ── Build trade lags ───────────────────────────────────────────────────────
+    # Only lag trade variables; ATOP and DESTA kept contemporaneous only
     trade_lag_cols = ["total_trade_ij","export_dependence","n_products_ij",
-                      "n_sections_ij","trade_dependence","atopally","defense",
-                      "offense","neutral","nonagg","consul","label","depth_index",
-                      "depth_rasch","enforce","enforce01"]
+                      "n_sections_ij","trade_dependence"]
     existing_lag_cols = [c for c in trade_lag_cols if c in trade.columns]
 
     trade_base = trade[["year","exporter","importer"] + existing_lag_cols].copy()
@@ -589,6 +588,29 @@ def build_ergm_eun(dyadic_enriched, annual_counts, tp_covariates, eun_node_attrs
     df["dispute_count"] = df["dispute_count"].fillna(0).astype(int)
     for c in sec_cols:
         df[c] = df[c].fillna(0).astype(int)
+
+    # ── Append dispute rows missing from trade universe (leave trade cols NaN) ─
+    # e.g. DNK→EUN (intra-EU trade not in BACI) or QAT→SAU (missing BACI record)
+    matched_keys = set(zip(
+        df.loc[df["has_dispute"] == 1, "exporter"],
+        df.loc[df["has_dispute"] == 1, "importer"],
+        df.loc[df["has_dispute"] == 1, "year"],
+    ))
+    missing_disputes = dispute_agg[
+        ~dispute_agg.apply(
+            lambda r: (r["exporter"], r["importer"], int(r["year"])) in matched_keys,
+            axis=1,
+        )
+    ]
+    if len(missing_disputes) > 0:
+        extra = pd.DataFrame(index=range(len(missing_disputes)), columns=df.columns)
+        for col in missing_disputes.columns:
+            if col in extra.columns:
+                extra[col] = missing_disputes[col].values
+        extra["has_dispute"]   = 1
+        extra["dispute_count"] = missing_disputes["dispute_count"].values
+        df = pd.concat([df, extra], ignore_index=True)
+        print(f"  [{len(extra)}] dispute rows appended outside trade universe (trade cols NaN)")
 
     # ── Add disputed sector trade from wto_dyadic_enriched ────────────────────
     # Only for C-R relationships; aggregate _max and _avg per dyad-year
