@@ -17,11 +17,20 @@ WTO/
 │   ├── country_meta_1995_2024.csv      # Country-year panel (196 x 30 years, 77 cols)
 │   ├── wto_cases_v2.csv                # Case metadata (644 cases, 29 cols)
 │   ├── wto_cases_harmonized.csv        # Harmonized case data with standardized names
-│   ├── wto_dyadic.csv                  # WTO dispute dyads (8,145 rows)
+│   ├── wto_dyadic_v2.csv               # WTO dispute dyads (8,373 rows, 36 cols)
+│   ├── wto_cases_enriched.csv          # Case metadata + severity + HS sections (644 rows) [ERGM]
+│   ├── wto_dyadic_enriched.csv         # Case-dyad + severity by role + sector trade (8,373 rows) [ERGM]
 │   ├── bilateral_trade_wto.csv         # Dyad-year trade + ATOP + DESTA (545k rows)
 │   ├── bilateral_trade_section_wto.csv # Dyad-year-section trade (6.4M rows)
 │   ├── desta_panel_1995_2025.csv       # DESTA trade agreement panel (235k rows)
-│   └── wto_mem_list.csv                # WTO membership list (166 members)
+│   ├── wto_mem_list.csv                # WTO membership list (166 members)
+│   ├── ergm_dyad_year_eun.csv          # ERGM base: ~545k directed dyad-years, EUN as unitary actor [ERGM]
+│   ├── ergm_dyad_year_eu_disagg.csv    # ERGM base: EU disputes disaggregated to member states [ERGM]
+│   └── Output/
+│       ├── industry_extraction.csv     # RAG: product descriptions, explicit HS codes (626 rows)
+│       ├── case_hs_sections.csv        # RAG: HS section classification per case (626 rows)
+│       ├── case_section_expanded.csv   # RAG: one row per case-section pair (3,003 rows)
+│       └── severity_scores_raw.csv     # RAG: severity scoring, 4 dimensions (626 rows)
 ├── WTO_DSB_Cases/
 │   └── [1-626]/                        # PDF documents by case number (9,417 files)
 ├── utils/
@@ -46,7 +55,8 @@ WTO/
 │   ├── process_all.py                  # Process all 626 cases
 │   ├── build_index.py                  # Build vector index (legacy, superseded by ingest.py)
 │   ├── build_baci_trade.py             # BACI trade aggregation (dual EU representation)
-│   └── build_dyadic_datasets.py        # Merge ATOP + DESTA + WTO filter
+│   ├── build_dyadic_datasets.py        # Merge ATOP + DESTA + WTO filter
+│   └── build_ergm_data.py              # ERGM data construction (cases + dyadic + panel datasets)
 ├── Output/
 │   ├── sample/                         # Sample outputs (CSV, JSONL, manifests)
 │   └── full/                           # Full run outputs
@@ -115,7 +125,7 @@ Retrieval-augmented generation system for two analytical tasks:
 **Note:** RAG pipeline processes DS1-DS626 only (documents collected up to DS626). Cases DS627+ have metadata but no PDFs.
 
 **Task B — Severity Scoring**:
-Scores political framing intensity on 3 dimensions (rhetorical intensity, core principles invocation, escalation signals) using only the complainant's own documents. Post-hoc z-score normalization within complainant and sector.
+Scores political framing intensity on 4 dimensions (`rhetorical_aggressiveness`, `systemic_reach`, `escalation_ultimatum`, `domestic_victimhood`) using only the complainant's own documents. Raw scores in `severity_scores_raw.csv`; post-hoc z-score normalization (within-complainant + within-sector) deferred until third-party scoring is complete.
 
 ### Architecture
 
@@ -156,9 +166,45 @@ python -m rag.run_all all --fresh                    # Ignore checkpoints
 | File | Rows | Description |
 |------|------|-------------|
 | `Data/Output/industry_extraction.csv` | 626 | Products, explicit HS codes, systemic/services flags |
-| `Data/Output/case_hs_sections.csv` | 626 | HS sections per case (title ground truth + RAG) |
-| `Data/Output/case_section_expanded.csv` | ~800-1200 | One row per case-section pair (for trade merge) |
-| `Data/Output/severity_scores.csv` | 626 | 3 dimensions + composite + z-scores |
+| `Data/Output/case_hs_sections.csv` | 626 | HS sections per case (title ground truth + RAG + case_type) |
+| `Data/Output/case_section_expanded.csv` | 3,003 | One row per case-section pair (sections 1–21) |
+| `Data/Output/severity_scores_raw.csv` | 626 | 4 dimensions + composite severity score (raw, un-normalized) |
+
+## ERGM Data Construction
+
+Builds analysis-ready datasets for Exponential Random Graph Model (ERGM) and dyadic regression.
+
+### Output Datasets
+
+| File | Unit | Rows | Description |
+|------|------|------|-------------|
+| `Data/wto_cases_enriched.csv` | Case | 644 | `wto_cases_v2` + severity + HS sections + `consultation_year` |
+| `Data/wto_dyadic_enriched.csv` | Case-dyad | 8,373 | `wto_dyadic_v2` + severity by role + disputed sector trade (t, t-1, t-2, t-3) |
+| `Data/ergm_dyad_year_eun.csv` | Directed dyad-year | ~545k | Full universe from `bilateral_trade_wto`; EU as unitary actor (EUN) |
+| `Data/ergm_dyad_year_eu_disagg.csv` | Directed dyad-year | ~545k | EU disputes disaggregated to individual EU member state rows |
+
+### Key Design Decisions
+
+- **Universe**: `bilateral_trade_wto` (all WTO-member directed dyad-years, 1995–2024)
+- **Outcome**: `has_dispute` = 1 when exporter filed a complaint against importer in year t
+- **Severity**: `dyadic_severity` assigned by relationship role — complainant-respondent: case score; third_party-respondent: 0.5 (placeholder until TP scoring complete); complainant-third_party: 0
+- **Multiple cases per dyad-year**: two versions — `_max` (most severe) and `_avg` (average)
+- **Trade lags**: t-1, t-2, t-3 for trade covariates; backward imputation: 1995→NaN, 1996→t-2=t-3=t-1, 1997→t-3=t-2
+- **Node attributes**: contemporaneous (year t), from `country_meta_1995_2024.csv` (48 columns, suffixed `_1`/`_2`)
+- **EU DESTA fix**: EUN rows inherit `label=1` if any EU member state has a trade agreement with the partner country
+- **EU node attributes**: gdp + pop summed from member states; other vars averaged
+- **EU disaggregation rule**: 395 EUN-only cases → expand to all EU members; 37 mixed cases (EUN + individual members) → drop EUN row, keep individual members; 30 individual-EU-member-only cases → unchanged
+- **Taiwan**: NaN for UN voting ideal points (`idealpointfp/all/legacy`) — not a UN member
+
+### Running
+
+```bash
+# Step-by-step (recommended — verify each stage)
+jupyter notebook DataConstruction.ipynb
+
+# Production script
+python scripts/build_ergm_data.py
+```
 
 ## Social Network Analysis
 
@@ -200,7 +246,7 @@ python -m rag.run_all all --fresh                    # Ignore checkpoints
 
 | File | Unit | Rows | Description |
 |------|------|------|-------------|
-| `Data/wto_dyadic.csv` | Case-dyad | 8,145 | WTO dispute country pairs with case metadata |
+| `Data/wto_dyadic_v2.csv` | Case-dyad | 8,373 | WTO dispute country pairs with case metadata (36 cols) |
 | `Data/bilateral_trade_wto.csv` | Directed dyad-year | 545,333 | BACI trade + ATOP alliances + DESTA agreements, WTO-filtered |
 | `Data/bilateral_trade_section_wto.csv` | Directed dyad-year-section | 6,374,486 | Sector-level trade, WTO-filtered |
 | `Data/desta_panel_1995_2025.csv` | Undirected dyad-year | 235,011 | DESTA trade agreement panel |
