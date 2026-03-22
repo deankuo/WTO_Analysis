@@ -8,9 +8,24 @@ editor: visual
 # Setup
 
 ```{r Packages}
+#| warning: false
 library(network)
 library(ergm)
 library(devtools)
+library(haven)
+
+# df1 regards EU as one member
+df1 <- read.csv("./Data/ergm_dyad_year_eun.csv")
+
+# df2 regards EU members seperately
+df2 <- read.csv("./Data/ergm_dyad_year_eu_disagg.csv")
+```
+
+```{r Preprocessing}
+ergm_df <- ergm_df %>%                                                                      
+    mutate(across(starts_with("severity_"), ~replace_na(., 0)),                                          across(starts_with("disputed_sector_"), ~replace_na(., 0)),                                   desta = replace_na(desta, 0),
+           bilateral_fta = replace_na(bilateral_fta, 0),
+           dispute_count = replace_na(dispute_count, 0))        
 ```
 
 # ERGM

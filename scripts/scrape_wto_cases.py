@@ -425,6 +425,13 @@ def _save_final(results: list[dict]):
 
     df = pd.DataFrame(results)
 
+    # Drop garbage rows where case ID is not a valid DS number (e.g. scraped DSB text)
+    valid_mask = df["case"].str.match(r"^DS\d+$", na=False)
+    n_dropped = (~valid_mask).sum()
+    if n_dropped:
+        logger.warning("Dropping %d rows with invalid case IDs (scraped garbage)", n_dropped)
+        df = df[valid_mask].reset_index(drop=True)
+
     # Sort by case number
     df["_sort"] = df["case"].str.extract(r"DS(\d+)").astype(int)
     df = df.sort_values("_sort").drop(columns=["_sort"]).reset_index(drop=True)
