@@ -20,6 +20,7 @@ docstore.pkl
 notes.md
 *.ipynb
 /Archive/
+.Rhistory
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
