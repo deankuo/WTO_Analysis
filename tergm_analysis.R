@@ -557,13 +557,13 @@ cat("\n--- Model 1L ---\n"); summary(model1L)
 # ===========================================================================
 
 screenreg(
-  list(model0, model1, model2),
+  list(model0, model1, model2, model3),
   custom.model.names = c("M0: No-EUN", "M1: Full", "M2: +Align", "M3: +Demo"),
   digits = 3
 )
 
 htmlreg(
-  list(model0, model1, model2, model3, model1L),
+  list(model0, model1, model2, model3),
   file = "Data/Output/tergm_results.html",
   custom.model.names = c("No-EUN Baseline", "Full + Trade", "+ Alignment", "+ Democracy"),
   digits = 3,
@@ -589,18 +589,16 @@ cat("GOF plot saved to Data/Output/tergm_gof.pdf\n")
 # ===========================================================================
 
 save(net_list, trade_cov, trade_cov_t1, ally_cov, pta_cov, depth_cov,
-     ideal_dist_cov, hhi_cov, export_conc_cov, import_dep_cov,
-     all_nodes, n_nodes, years,
+     ideal_dist_cov,all_nodes, n_nodes, years,
      file = "Data/Output/tergm_prepared_data.RData")
 
 save(net_list_noeun, trade_cov_noeun, trade_cov_t1_noeun,
      ally_cov_noeun, pta_cov_noeun, ideal_dist_cov_noeun,
-     hhi_cov_noeun, export_conc_cov_noeun, import_dep_cov_noeun,
      all_nodes_noeun, n_nodes_noeun, years,
      file = "Data/Output/tergm_prepared_data_noeun.RData")
 
 save(net_list_dem, trade_cov_dem, ally_cov_dem, pta_cov_dem,
-     ideal_dist_cov_dem, hhi_cov_dem, export_conc_cov_dem, import_dep_cov_dem,
+     ideal_dist_cov_dem,
      all_nodes_dem, n_nodes_dem, nodes_missing_vdem, years,
      file = "Data/Output/tergm_prepared_data_dem.RData")
 
