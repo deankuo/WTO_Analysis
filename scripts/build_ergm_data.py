@@ -304,6 +304,68 @@ def build_annual_wto_counts(dyadic_enriched):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# STEP 3b: Section-level dyadic covariates
+# ══════════════════════════════════════════════════════════════════════════════
+
+def aggregate_section_covariates(sec_path):
+    """
+    Aggregate bilateral_trade_section_wto.csv to (year, exporter, importer) level.
+
+    Columns produced
+    ----------------
+    trade_hhi        : HHI of bilateral trade shares across HS sections.
+                       share_s = trade_ij_s / total_trade_ij;  HHI = sum(share_s^2).
+                       Range [1/21 ≈ 0.048, 1.0]; higher = more concentrated.
+    max_export_conc  : max_s(partner_sector_dependence)
+                       = max share of exporter i's section-s exports that go to j.
+                       Captures i's export vulnerability to j in its most exposed sector.
+    max_reverse_dep  : max_s(partner_sector_dependence from reverse row j→i)
+                       = max share of importer j's section-s exports that go to i.
+                       Proxy for j's reliance on i as an export market (i's leverage over j).
+    """
+    print("[Step 3b] Aggregating section-level covariates from bilateral_trade_section_wto.csv ...")
+
+    sec = pd.read_csv(sec_path, usecols=[
+        "year", "exporter", "importer",
+        "bilateral_sector_concentration",   # trade_ij_s / total_exports_i
+        "partner_sector_dependence",        # trade_ij_s / total_exports_i_s
+    ])
+
+    # ── HHI: normalize bilateral_sector_concentration to within-dyad shares ──
+    # sum(bilateral_sector_concentration) per dyad = total_trade_ij / total_exports_i
+    # Normalize: share_s = bilateral_sector_concentration_s / sum_s(bilateral_sector_concentration)
+    dyad_sum = (
+        sec.groupby(["year", "exporter", "importer"])["bilateral_sector_concentration"]
+        .sum()
+        .reset_index(name="biconc_sum")
+    )
+    sec = sec.merge(dyad_sum, on=["year", "exporter", "importer"])
+    sec["share_sq"] = np.where(
+        sec["biconc_sum"] > 0,
+        (sec["bilateral_sector_concentration"] / sec["biconc_sum"]) ** 2,
+        0.0,
+    )
+
+    # ── Aggregate to dyad-year ─────────────────────────────────────────────────
+    fwd = sec.groupby(["year", "exporter", "importer"]).agg(
+        trade_hhi       = ("share_sq",                 "sum"),
+        max_export_conc = ("partner_sector_dependence", "max"),
+    ).reset_index()
+
+    # ── Reverse-direction dependence ───────────────────────────────────────────
+    rev = (
+        sec.groupby(["year", "exporter", "importer"])["partner_sector_dependence"]
+        .max()
+        .reset_index(name="max_reverse_dep")
+        .rename(columns={"exporter": "importer", "importer": "exporter"})  # swap
+    )
+    fwd = fwd.merge(rev, on=["year", "exporter", "importer"], how="left")
+
+    print(f"  Section covariates computed: {len(fwd):,} dyad-year rows")
+    return fwd
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # STEP 4: EUN DESTA fix + EUN node attribute aggregation
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -471,6 +533,10 @@ def build_ergm_eun(dyadic_enriched, annual_counts, tp_covariates, eun_node_attrs
     # Fix EUN DESTA
     trade = fix_eun_desta(trade, eu_mem)
 
+    # Section-level covariates
+    sec_covs = aggregate_section_covariates(p("bilateral_trade_section_wto.csv"))
+    trade = trade.merge(sec_covs, on=["year", "exporter", "importer"], how="left")
+
     # Meta column selection
     keep_cols = [c for c in meta.columns if c not in META_EXCLUDE]
     meta = meta[keep_cols].copy()
@@ -558,7 +624,8 @@ def build_ergm_eun(dyadic_enriched, annual_counts, tp_covariates, eun_node_attrs
     # ── Build trade lags ───────────────────────────────────────────────────────
     # Only lag trade variables; ATOP and DESTA kept contemporaneous only
     trade_lag_cols = ["total_trade_ij","export_dependence","n_products_ij",
-                      "n_sections_ij","trade_dependence"]
+                      "n_sections_ij","trade_dependence",
+                      "trade_hhi","max_export_conc","max_reverse_dep"]
     existing_lag_cols = [c for c in trade_lag_cols if c in trade.columns]
 
     trade_base = trade[["year","exporter","importer"] + existing_lag_cols].copy()
