@@ -60,8 +60,7 @@
 # 0. SETUP
 # ===========================================================================
 
-library(dplyr)
-library(tidyr)
+suppressPackageStartupMessages(library(tidyverse))
 
 # ergm.sign is required for estimation; data preparation runs without it
 ERGM_SIGN_AVAILABLE <- tryCatch({
@@ -195,6 +194,50 @@ severity_agg <- wto_dyadic %>%
 cat("\nSeverity aggregation rows:", nrow(severity_agg), "\n")
 cat("Severity range:", range(severity_agg$severity), "\n")
 
+# Visualization
+plot_data <- signed_agg %>%
+    group_by(year) %>%
+    summarise(
+        Negative = sum(sign == -1),
+        Positive = sum(sign == 1),
+        .groups = "drop"
+    ) %>%
+    # Convert to long format for ggplot mapping
+    pivot_longer(cols = c(Negative, Positive), 
+                 names_to = "Relationship_Type", 
+                 values_to = "Count")
+
+ggplot(plot_data, aes(x = year, y = Count, color = Relationship_Type, linetype = Relationship_Type)) +
+    # Add points and lines
+    geom_line(size = 1) +
+    geom_point(size = 2) +
+    # Customizing Colors (Academic palettes: Red for Conflict, Blue/Black for Cooperation)
+    scale_color_manual(values = c("Negative" = "#D55E00", "Positive" = "#0072B2")) +
+    # Formal labels
+    labs(
+        title = "Evolution of WTO Signed Dyadic Relations (1995-2024)",
+        x = "Year",
+        y = "Number of Dyads",
+        color = "Dyad Relation",
+        linetype = "Dyad Relation"
+    ) +
+    # Academic Theme
+    theme_minimal(base_family = "sans") +
+    theme(
+        plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+        plot.subtitle = element_text(size = 11, hjust = 0.5, color = "grey30"),
+        legend.position = "bottom",
+        panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank(), # Keep horizontal grids for readability
+        axis.line = element_line(color = "black"),
+        text = element_text(size = 12)
+    ) +
+    # Ensure x-axis shows appropriate intervals
+    scale_x_continuous(breaks = seq(1995, 2025, by = 5))
+
+# Save
+ggsave("./Graph/WTO_Dispute_Trends.png", width = 8, height = 5)
+
 # ===========================================================================
 # 4. DEFINE NODE SETS
 # ===========================================================================
@@ -249,6 +292,8 @@ nodes_missing_vdem_s <- country_meta_dem_s %>%
                 is.na)) %>%
   pull(iso3c) %>% unique()
 
+# Drop 21 nodes: 
+# AND, ATG, BHS, BLZ, BRN, DMA, FSM, GRD, KIR, KNA, LCA, LIE, MCO, MHL, NRU, PLW, SMR, TON, TUV, VCT, WSM
 if (length(nodes_missing_vdem_s) > 0) {
   cat("\nDemocracy-complete (SERGM): dropping", length(nodes_missing_vdem_s),
       "nodes missing v2x_polyarchy:\n ",
@@ -392,16 +437,17 @@ build_signed_nets <- function(edges_agg, panel, meta, nodes, severity_agg = NULL
   import_dep_cov_s  <- list()
   severity_cov_s    <- list()
   # Node-level covariates encoded as dyadic sum matrices M[i,j] = v[i] + v[j]
-  # (ergm.sign has no nodecov term; sum is equivalent to undirected nodecov)
+  # Kept for backward compatibility with saved RData; mple_sign uses nodecov() instead.
   gdp_cov_s         <- list()
   pop_cov_s         <- list()
   activity_cov_s    <- list()   # cum_complainant + cum_respondent
   vdem_cov_s        <- list()   # v2x_polyarchy (NA -> 0 if not dem-complete set)
   # Absolute difference matrices M[i,j] = |v[i] - v[j]|
-  # (analogous to absdiff() in btergm; captures economic/size gap between dyad)
   gdp_diff_cov_s    <- list()
   pop_diff_cov_s    <- list()
   node_attr_list    <- list()
+  # Per-year network.sign objects (for networks.sign pooled combination)
+  sign_net_objects  <- list()
 
   for (yr in years) {
     cat("\rBuilding signed network for year", yr, "...")
@@ -518,10 +564,37 @@ build_signed_nets <- function(edges_agg, panel, meta, nodes, severity_agg = NULL
     gdp_diff_cov_s[[yr_key]]     <- safe_diff_mat(gdp_vec)
     pop_diff_cov_s[[yr_key]]     <- safe_diff_mat(pop_vec)
     node_attr_list[[yr_key]]     <- node_df
+
+    # ---- network.sign object with year-specific vertex attributes ----
+    # mple_sign accesses these via Pos(~ nodecov("attr")) / Neg(~ nodecov("attr")).
+    eb_vec <- if ("election_binary" %in% names(node_df)) node_df$election_binary
+              else rep(0, n)
+    sign_net_objects[[yr_key]] <- network.sign(
+      mat          = adj,
+      directed     = FALSE,
+      vertex.names = nodes,
+      vertex.attr  = list(
+        log_gdppc       = ifelse(is.na(gdp_vec),  0, gdp_vec),
+        log_pop         = ifelse(is.na(pop_vec),   0, pop_vec),
+        cum_complainant = ifelse(is.na(cc_vec),    0, cc_vec),
+        cum_respondent  = ifelse(is.na(cr_vec),    0, cr_vec),
+        cum_activity    = act_vec,
+        v2x_polyarchy   = ifelse(is.na(vdem_vec),  0, vdem_vec),
+        idealpointfp    = ifelse(is.na(ip_vec),    0, ip_vec),
+        election_binary = ifelse(is.na(eb_vec),    0, eb_vec)
+      )
+    )
   }
   cat("\n")
 
+  # Combine per-year network.sign objects into a pooled multi-network.
+  # dynamic=FALSE: years treated as independent cross-sections (pooled MPLE).
+  # Edge covariates must be time-averaged and passed directly in the formula.
+  networks_combined <- do.call(networks.sign, c(sign_net_objects, list(dynamic = FALSE)))
+
   list(signed_net_list   = signed_net_list,
+       networks_combined = networks_combined,
+       sign_net_objects  = sign_net_objects,
        trade_cov_s       = trade_cov_s,
        ally_cov_s        = ally_cov_s,
        pta_cov_s         = pta_cov_s,
@@ -563,7 +636,8 @@ ip_dem_s <- build_signed_nets(signed_agg_ip_dem_s, ergm_panel_ip_dem_s,
                               severity_agg_ip_dem_s)
 
 # Unpack full
-signed_net_list    <- full_s$signed_net_list
+signed_net_list       <- full_s$signed_net_list
+networks_combined     <- full_s$networks_combined
 trade_cov_s        <- full_s$trade_cov_s
 ally_cov_s         <- full_s$ally_cov_s
 pta_cov_s          <- full_s$pta_cov_s
@@ -581,6 +655,7 @@ pop_diff_cov_s     <- full_s$pop_diff_cov_s
 
 # Unpack no-EUN
 signed_net_list_noeun    <- noeun_s$signed_net_list
+networks_combined_noeun  <- noeun_s$networks_combined
 trade_cov_s_noeun        <- noeun_s$trade_cov_s
 ally_cov_s_noeun         <- noeun_s$ally_cov_s
 pta_cov_s_noeun          <- noeun_s$pta_cov_s
@@ -596,7 +671,8 @@ gdp_diff_cov_s_noeun     <- noeun_s$gdp_diff_cov_s
 pop_diff_cov_s_noeun     <- noeun_s$pop_diff_cov_s
 
 # Unpack ip-complete (Model S2)
-signed_net_list_ip_s    <- ip_s$signed_net_list
+signed_net_list_ip_s     <- ip_s$signed_net_list
+networks_combined_ip_s   <- ip_s$networks_combined
 trade_cov_s_ip_s        <- ip_s$trade_cov_s
 ally_cov_s_ip_s         <- ip_s$ally_cov_s
 pta_cov_s_ip_s          <- ip_s$pta_cov_s
@@ -613,7 +689,8 @@ gdp_diff_cov_s_ip_s     <- ip_s$gdp_diff_cov_s
 pop_diff_cov_s_ip_s     <- ip_s$pop_diff_cov_s
 
 # Unpack ip+dem-complete (Model S3)
-signed_net_list_ip_dem_s   <- ip_dem_s$signed_net_list
+signed_net_list_ip_dem_s     <- ip_dem_s$signed_net_list
+networks_combined_ip_dem_s   <- ip_dem_s$networks_combined
 trade_cov_s_ip_dem_s       <- ip_dem_s$trade_cov_s
 ally_cov_s_ip_dem_s        <- ip_dem_s$ally_cov_s
 pta_cov_s_ip_dem_s         <- ip_dem_s$pta_cov_s
@@ -642,19 +719,55 @@ for (yr in c("1995","2000","2005","2010","2015","2020","2024")) {
 }
 
 # ===========================================================================
-# 7. TSERGM ESTIMATION  (requires ergm.sign)
+# 6.5. TIME-AVERAGED EDGE COVARIATE MATRICES
+# ===========================================================================
+# mple_sign() on a pooled networks.sign(dynamic=FALSE) object accepts a single
+# n x n matrix per edge covariate (applied uniformly across all years).
+# Node covariates are year-specific via vertex attributes stored on each
+# network.sign object. Edge covariates are averaged across all 30 years here.
+
+avg_mat <- function(mat_list) Reduce("+", mat_list) / length(mat_list)
+
+# Full
+trade_avg            <- avg_mat(trade_cov_s);        ally_avg         <- avg_mat(ally_cov_s)
+pta_avg              <- avg_mat(pta_cov_s);           hhi_avg          <- avg_mat(hhi_cov_s)
+export_conc_avg      <- avg_mat(export_conc_cov_s);  import_dep_avg   <- avg_mat(import_dep_cov_s)
+severity_avg         <- avg_mat(severity_cov_s);     gdp_diff_avg     <- avg_mat(gdp_diff_cov_s)
+pop_diff_avg         <- avg_mat(pop_diff_cov_s)
+# No-EUN
+trade_avg_noeun      <- avg_mat(trade_cov_s_noeun);      ally_avg_noeun      <- avg_mat(ally_cov_s_noeun)
+pta_avg_noeun        <- avg_mat(pta_cov_s_noeun);        hhi_avg_noeun       <- avg_mat(hhi_cov_s_noeun)
+export_conc_avg_noeun <- avg_mat(export_conc_cov_s_noeun); import_dep_avg_noeun <- avg_mat(import_dep_cov_s_noeun)
+
+severity_avg_noeun   <- avg_mat(severity_cov_s_noeun);   gdp_diff_avg_noeun  <- avg_mat(gdp_diff_cov_s_noeun)
+pop_diff_avg_noeun   <- avg_mat(pop_diff_cov_s_noeun)
+# IP-complete (S2)
+trade_avg_ip_s       <- avg_mat(trade_cov_s_ip_s);       ally_avg_ip_s       <- avg_mat(ally_cov_s_ip_s)
+pta_avg_ip_s         <- avg_mat(pta_cov_s_ip_s);         hhi_avg_ip_s        <- avg_mat(hhi_cov_s_ip_s)
+export_conc_avg_ip_s <- avg_mat(export_conc_cov_s_ip_s); import_dep_avg_ip_s <- avg_mat(import_dep_cov_s_ip_s)
+severity_avg_ip_s    <- avg_mat(severity_cov_s_ip_s);    ideal_dist_avg_ip_s <- avg_mat(ideal_dist_cov_s_ip_s)
+gdp_diff_avg_ip_s    <- avg_mat(gdp_diff_cov_s_ip_s);   pop_diff_avg_ip_s   <- avg_mat(pop_diff_cov_s_ip_s)
+# IP+Dem-complete (S3)
+trade_avg_ip_dem_s       <- avg_mat(trade_cov_s_ip_dem_s);       ally_avg_ip_dem_s       <- avg_mat(ally_cov_s_ip_dem_s)
+pta_avg_ip_dem_s         <- avg_mat(pta_cov_s_ip_dem_s);         hhi_avg_ip_dem_s        <- avg_mat(hhi_cov_s_ip_dem_s)
+export_conc_avg_ip_dem_s <- avg_mat(export_conc_cov_s_ip_dem_s); import_dep_avg_ip_dem_s <- avg_mat(import_dep_cov_s_ip_dem_s)
+severity_avg_ip_dem_s    <- avg_mat(severity_cov_s_ip_dem_s);    ideal_dist_avg_ip_dem_s <- avg_mat(ideal_dist_cov_s_ip_dem_s)
+gdp_diff_avg_ip_dem_s    <- avg_mat(gdp_diff_cov_s_ip_dem_s);   pop_diff_avg_ip_dem_s   <- avg_mat(pop_diff_cov_s_ip_dem_s)
+
+cat("Time-averaged edge covariate matrices computed.\n")
+
+# ===========================================================================
+# 7. SERGM ESTIMATION  (requires ergm.sign)
 # ===========================================================================
 #
-# tsergm() models the joint likelihood across all years:
-#   P(Y_1, ..., Y_T) = prod_t P(Y_t | theta)
-# Covariates passed as lists of matrices are automatically matched to the
-# corresponding year's network (by list index order, same as signed_net_list).
+# mple_sign() fits a pooled cross-sectional signed ERGM via MPLE.
+# LHS: networks.sign(dynamic=FALSE) — 30 years pooled as independent obs.
+# Node covariates (Pos/Neg ~ nodecov): year-specific via vertex attributes.
+# Edge covariates (Pos/Neg ~ edgecov): time-averaged matrices (limitation of
+#   the ergm.sign API — edgecov(list) is not supported for multi-networks).
 #
-# Estimation:
-#   method_est = "MPLE"   — pseudo-likelihood + parametric bootstrap SE
-#                            (fast; recommended for initial run & specification search)
-#   method_est = "RM"     — Robbins-Monroe MCMCMLE (more accurate; slower)
-#   method_est = "MLE"    — standard MCMCMLE (most accurate; use for final results)
+# Estimation: ergm.sign has no control.sergm(); use control.ergm() if needed.
+#   Default: MPLE. For Godambe SEs: control.ergm(MPLE.covariance.method="Godambe").
 #
 # Balance term alpha (decay parameter, fixed):
 #   alpha = 0.5 is a common default; profile the log-likelihood over
@@ -675,128 +788,147 @@ for (yr in c("1995","2000","2005","2010","2015","2020","2024")) {
 
 if (ERGM_SIGN_AVAILABLE) {
 
-  # Default control: MPLE for speed; switch to "RM" or "MLE" for final results
-  SERGM_CONTROL <- control.sergm(method_est = "MPLE")
-  ALPHA         <- 0.5   # GW decay parameter (fixed)
+  ALPHA <- 0.5   # GW decay parameter (fixed)
 
   # ---- Model S0: No-EUN baseline ----
   cat("\n=== Model S0: No-EUN Baseline (n =", n_nodes_noeun, "nodes) ===\n")
-  sergm_s0 <- tsergm(
-    signed_net_list_noeun ~
-      edges_pos +
-      edges_neg +
-      gwdegree_pos(data = matrix(ALPHA)) +    # degree dist: positive edges
-      gwdegree_neg(data = matrix(ALPHA)) +    # degree dist: negative edges
-      gwesf_pos(data = matrix(ALPHA)) +       # friends-of-friends -> friend (balance)
-      gwese_pos(data = matrix(ALPHA)) +       # enemies-of-enemies -> friend (balance)
-      cov_dyad(data = trade_cov_s_noeun) +
-      cov_dyad_pos(data = ally_cov_s_noeun) +  # alliance -> C-TP alignment
-      cov_dyad_neg(data = ally_cov_s_noeun) +  # alliance -> C-R dispute (costly signal)
-      cov_dyad_pos(data = pta_cov_s_noeun) +
-      cov_dyad_neg(data = pta_cov_s_noeun) +
-      cov_dyad_neg(data = severity_cov_s_noeun) +  # conflict intensity -> negative only
-      cov_dyad(data = gdp_cov_s_noeun) +
-      cov_dyad(data = pop_cov_s_noeun) +
-      cov_dyad(data = gdp_diff_cov_s_noeun) +     # |log_gdppc_i - log_gdppc_j| (economic gap)
-      cov_dyad(data = pop_diff_cov_s_noeun) +     # |log_pop_i - log_pop_j| (size gap)
-      cov_dyad(data = activity_cov_s_noeun),
-    control = SERGM_CONTROL
+  sergm_s0 <- mple_sign(
+    networks_combined_noeun ~
+      Pos(~ edges) +
+      Neg(~ edges) +
+      Pos(~ gwdegree(decay = ALPHA, fixed = TRUE)) +  # degree dist: + edges
+      Neg(~ gwdegree(decay = ALPHA, fixed = TRUE)) +  # degree dist: - edges
+      gwesf(ALPHA, fixed = TRUE, base = "+") +        # friends-of-friends -> friends
+      gwese(ALPHA, fixed = TRUE, base = "+") +        # enemies-of-enemies -> friends
+      Pos(~ edgecov(trade_avg_noeun)) +               # trade (same sign on both)
+      Neg(~ edgecov(trade_avg_noeun)) +
+      Pos(~ edgecov(ally_avg_noeun)) +                # alliance -> C-TP alignment
+      Neg(~ edgecov(ally_avg_noeun)) +                # alliance -> C-R dispute
+      Pos(~ edgecov(pta_avg_noeun)) +
+      Neg(~ edgecov(pta_avg_noeun)) +
+      Neg(~ edgecov(severity_avg_noeun)) +            # severity -> negative only
+      # Pos(~ nodecov("log_gdppc")) +
+      # Neg(~ nodecov("log_gdppc")) +
+      # Pos(~ nodecov("log_pop")) +
+      # Neg(~ nodecov("log_pop")) +
+      # Pos(~ edgecov(gdp_diff_avg_noeun)) +            # |log_gdppc_i - log_gdppc_j|
+      # Neg(~ edgecov(gdp_diff_avg_noeun)) +
+      # Pos(~ edgecov(pop_diff_avg_noeun)) +            # |log_pop_i - log_pop_j|
+      # Neg(~ edgecov(pop_diff_avg_noeun)) +
+      Pos(~ nodecov("cum_complainant")) +                                                                                                               
+      Neg(~ nodecov("cum_complainant")) +                       
+      Pos(~ nodecov("cum_respondent")) +
+      Neg(~ nodecov("cum_respondent"))
+      # control = control.ergm(MPLE.covariance.method = "naive")  # skip simulation
   )
-  cat("\n--- Model S0 (No-EUN) ---\n"); print(sergm_s0)
+  cat("\n--- Model S0 (No-EUN) ---\n"); print(summary(sergm_s0))
 
-  # ---- Model S1: Full (incl. EUN) — structural + trade + section covs ----
+  # ---- Model S1: Full (incl. EUN) — + section covariates ----
   cat("\n=== Model S1: Full (incl. EUN), n =", n_nodes, "nodes ===\n")
-  sergm_s1 <- tsergm(
-    signed_net_list ~
-      edges_pos +
-      edges_neg +
-      gwdegree_pos(data = matrix(ALPHA)) +
-      gwdegree_neg(data = matrix(ALPHA)) +
-      gwesf_pos(data = matrix(ALPHA)) +
-      gwese_pos(data = matrix(ALPHA)) +
-      cov_dyad(data = trade_cov_s) +
-      cov_dyad_pos(data = ally_cov_s) +
-      cov_dyad_neg(data = ally_cov_s) +
-      cov_dyad_pos(data = pta_cov_s) +
-      cov_dyad_neg(data = pta_cov_s) +
-      cov_dyad_neg(data = hhi_cov_s) +         # trade concentration -> disputes
-      cov_dyad_neg(data = export_conc_cov_s) + # export dependence -> disputes
-      cov_dyad_neg(data = import_dep_cov_s) +  # import leverage -> disputes
-      cov_dyad_neg(data = severity_cov_s) +
-      cov_dyad(data = gdp_cov_s) +
-      cov_dyad(data = pop_cov_s) +
-      cov_dyad(data = gdp_diff_cov_s) +           # |log_gdppc_i - log_gdppc_j|
-      cov_dyad(data = pop_diff_cov_s) +           # |log_pop_i - log_pop_j|
-      cov_dyad(data = activity_cov_s),
-    control = SERGM_CONTROL
+  sergm_s1 <- mple_sign(
+    networks_combined ~
+      Pos(~ edges) +
+      Neg(~ edges) +
+      Pos(~ gwdegree(decay = ALPHA, fixed = TRUE)) +
+      Neg(~ gwdegree(decay = ALPHA, fixed = TRUE)) +
+      gwesf(ALPHA, fixed = TRUE, base = "+") +
+      gwese(ALPHA, fixed = TRUE, base = "+") +
+      Pos(~ edgecov(trade_avg)) +
+      Neg(~ edgecov(trade_avg)) +
+      Pos(~ edgecov(ally_avg)) +
+      Neg(~ edgecov(ally_avg)) +
+      Pos(~ edgecov(pta_avg)) +
+      Neg(~ edgecov(pta_avg)) +
+      Neg(~ edgecov(hhi_avg)) +                       # trade concentration -> disputes
+      Neg(~ edgecov(export_conc_avg)) +               # export dependence -> disputes
+      Neg(~ edgecov(import_dep_avg)) +                # import leverage -> disputes
+      Neg(~ edgecov(severity_avg)) +
+      Pos(~ nodecov("log_gdppc")) +
+      Neg(~ nodecov("log_gdppc")) +
+      Pos(~ nodecov("log_pop")) +
+      Neg(~ nodecov("log_pop")) +
+      Pos(~ edgecov(gdp_diff_avg)) +
+      Neg(~ edgecov(gdp_diff_avg)) +
+      Pos(~ edgecov(pop_diff_avg)) +
+      Neg(~ edgecov(pop_diff_avg)) +
+      Pos(~ nodecov("cum_activity")) +
+      Neg(~ nodecov("cum_activity"))
   )
-  cat("\n--- Model S1 ---\n"); print(sergm_s1)
+  cat("\n--- Model S1 ---\n"); print(summary(sergm_s1))
 
   # ---- Model S2: + Political alignment (ip-complete node set) ----
-  # Uses ip-complete: non-UN-member nodes (Taiwan etc.) dropped.
   cat("\n=== Model S2: + Political Alignment (ip-complete, n =", n_nodes_ip_s, "nodes) ===\n")
-  sergm_s2 <- tsergm(
-    signed_net_list_ip_s ~
-      edges_pos +
-      edges_neg +
-      gwdegree_pos(data = matrix(ALPHA)) +
-      gwdegree_neg(data = matrix(ALPHA)) +
-      gwesf_pos(data = matrix(ALPHA)) +
-      gwese_pos(data = matrix(ALPHA)) +
-      cov_dyad(data = trade_cov_s_ip_s) +
-      cov_dyad_pos(data = ally_cov_s_ip_s) +
-      cov_dyad_neg(data = ally_cov_s_ip_s) +
-      cov_dyad_pos(data = pta_cov_s_ip_s) +
-      cov_dyad_neg(data = pta_cov_s_ip_s) +
-      cov_dyad_neg(data = hhi_cov_s_ip_s) +
-      cov_dyad_neg(data = export_conc_cov_s_ip_s) +
-      cov_dyad_neg(data = import_dep_cov_s_ip_s) +
-      cov_dyad_neg(data = severity_cov_s_ip_s) +
-      cov_dyad_neg(data = ideal_dist_cov_s_ip_s) +  # political distance -> disputes
-      cov_dyad(data = gdp_cov_s_ip_s) +
-      cov_dyad(data = pop_cov_s_ip_s) +
-      cov_dyad(data = gdp_diff_cov_s_ip_s) +        # |log_gdppc_i - log_gdppc_j|
-      cov_dyad(data = pop_diff_cov_s_ip_s) +        # |log_pop_i - log_pop_j|
-      cov_dyad(data = activity_cov_s_ip_s),
-    control = SERGM_CONTROL
+  sergm_s2 <- mple_sign(
+    networks_combined_ip_s ~
+      Pos(~ edges) +
+      Neg(~ edges) +
+      Pos(~ gwdegree(decay = ALPHA, fixed = TRUE)) +
+      Neg(~ gwdegree(decay = ALPHA, fixed = TRUE)) +
+      gwesf(ALPHA, fixed = TRUE, base = "+") +
+      gwese(ALPHA, fixed = TRUE, base = "+") +
+      Pos(~ edgecov(trade_avg_ip_s)) +
+      Neg(~ edgecov(trade_avg_ip_s)) +
+      Pos(~ edgecov(ally_avg_ip_s)) +
+      Neg(~ edgecov(ally_avg_ip_s)) +
+      Pos(~ edgecov(pta_avg_ip_s)) +
+      Neg(~ edgecov(pta_avg_ip_s)) +
+      Neg(~ edgecov(hhi_avg_ip_s)) +
+      Neg(~ edgecov(export_conc_avg_ip_s)) +
+      Neg(~ edgecov(import_dep_avg_ip_s)) +
+      Neg(~ edgecov(severity_avg_ip_s)) +
+      Neg(~ edgecov(ideal_dist_avg_ip_s)) +           # political distance -> disputes
+      Pos(~ nodecov("log_gdppc")) +
+      Neg(~ nodecov("log_gdppc")) +
+      Pos(~ nodecov("log_pop")) +
+      Neg(~ nodecov("log_pop")) +
+      Pos(~ edgecov(gdp_diff_avg_ip_s)) +
+      Neg(~ edgecov(gdp_diff_avg_ip_s)) +
+      Pos(~ edgecov(pop_diff_avg_ip_s)) +
+      Neg(~ edgecov(pop_diff_avg_ip_s)) +
+      Pos(~ nodecov("cum_activity")) +
+      Neg(~ nodecov("cum_activity"))
   )
-  cat("\n--- Model S2 ---\n"); print(sergm_s2)
+  cat("\n--- Model S2 ---\n"); print(summary(sergm_s2))
 
   # ---- Model S3: + Democracy (ip+dem-complete node set) ----
-  # Separate from S2: drops nodes missing EITHER idealpointfp OR v2x_polyarchy.
-  # vdem_cov_s_ip_dem_s = sum of v2x_polyarchy for dyad (M[i,j] = vdem[i]+vdem[j]).
   cat("\n=== Model S3: + Democracy (ip+dem-complete, n =", n_nodes_ip_dem_s, "nodes) ===\n")
-  sergm_s3 <- tsergm(
-    signed_net_list_ip_dem_s ~
-      edges_pos +
-      edges_neg +
-      gwdegree_pos(data = matrix(ALPHA)) +
-      gwdegree_neg(data = matrix(ALPHA)) +
-      gwesf_pos(data = matrix(ALPHA)) +
-      gwese_pos(data = matrix(ALPHA)) +
-      cov_dyad(data = trade_cov_s_ip_dem_s) +
-      cov_dyad_pos(data = ally_cov_s_ip_dem_s) +
-      cov_dyad_neg(data = ally_cov_s_ip_dem_s) +
-      cov_dyad_pos(data = pta_cov_s_ip_dem_s) +
-      cov_dyad_neg(data = pta_cov_s_ip_dem_s) +
-      cov_dyad_neg(data = hhi_cov_s_ip_dem_s) +
-      cov_dyad_neg(data = export_conc_cov_s_ip_dem_s) +
-      cov_dyad_neg(data = import_dep_cov_s_ip_dem_s) +
-      cov_dyad_neg(data = severity_cov_s_ip_dem_s) +
-      cov_dyad_neg(data = ideal_dist_cov_s_ip_dem_s) +
-      cov_dyad(data = gdp_cov_s_ip_dem_s) +
-      cov_dyad(data = pop_cov_s_ip_dem_s) +
-      cov_dyad(data = gdp_diff_cov_s_ip_dem_s) +    # |log_gdppc_i - log_gdppc_j|
-      cov_dyad(data = pop_diff_cov_s_ip_dem_s) +    # |log_pop_i - log_pop_j|
-      cov_dyad(data = activity_cov_s_ip_dem_s) +
-      cov_dyad(data = vdem_cov_s_ip_dem_s),    # democracy dyadic sum (no NAs)
-    control = SERGM_CONTROL
+  sergm_s3 <- mple_sign(
+    networks_combined_ip_dem_s ~
+      Pos(~ edges) +
+      Neg(~ edges) +
+      Pos(~ gwdegree(decay = ALPHA, fixed = TRUE)) +
+      Neg(~ gwdegree(decay = ALPHA, fixed = TRUE)) +
+      gwesf(ALPHA, fixed = TRUE, base = "+") +
+      gwese(ALPHA, fixed = TRUE, base = "+") +
+      Pos(~ edgecov(trade_avg_ip_dem_s)) +
+      Neg(~ edgecov(trade_avg_ip_dem_s)) +
+      Pos(~ edgecov(ally_avg_ip_dem_s)) +
+      Neg(~ edgecov(ally_avg_ip_dem_s)) +
+      Pos(~ edgecov(pta_avg_ip_dem_s)) +
+      Neg(~ edgecov(pta_avg_ip_dem_s)) +
+      Neg(~ edgecov(hhi_avg_ip_dem_s)) +
+      Neg(~ edgecov(export_conc_avg_ip_dem_s)) +
+      Neg(~ edgecov(import_dep_avg_ip_dem_s)) +
+      Neg(~ edgecov(severity_avg_ip_dem_s)) +
+      Neg(~ edgecov(ideal_dist_avg_ip_dem_s)) +
+      Pos(~ nodecov("log_gdppc")) +
+      Neg(~ nodecov("log_gdppc")) +
+      Pos(~ nodecov("log_pop")) +
+      Neg(~ nodecov("log_pop")) +
+      Pos(~ edgecov(gdp_diff_avg_ip_dem_s)) +
+      Neg(~ edgecov(gdp_diff_avg_ip_dem_s)) +
+      Pos(~ edgecov(pop_diff_avg_ip_dem_s)) +
+      Neg(~ edgecov(pop_diff_avg_ip_dem_s)) +
+      Pos(~ nodecov("cum_activity")) +
+      Neg(~ nodecov("cum_activity")) +
+      Pos(~ nodecov("v2x_polyarchy")) +              # democracy (no NAs in ip_dem set)
+      Neg(~ nodecov("v2x_polyarchy"))
   )
-  cat("\n--- Model S3 ---\n"); print(sergm_s3)
+  cat("\n--- Model S3 ---\n"); print(summary(sergm_s3))
 
   # GOF (Model S2 — main specification)
   cat("\n=== Goodness-of-fit (Model S2) ===\n")
-  gof_s2 <- gof_sign(sergm_s2)
+  gof_s2 <- GoF(sergm_s2)
   pdf("Data/Output/sergm_gof.pdf", width = 10, height = 8)
   plot(gof_s2)
   dev.off()
