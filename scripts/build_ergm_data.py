@@ -442,10 +442,15 @@ def build_eun_node_attrs(meta_df, eu_mem_df):
 
     # Columns to skip: WTO participation data comes from existing EUN rows in
     # country_meta (correct collective EU cases) — don't aggregate from member states.
+    # election_binary: EU Parliament elections are supranational and not comparable
+    # to national elections — averaging member states gives fractional values (e.g.
+    # 0.31) which are substantively meaningless. Exclude from aggregation; a hard
+    # override sets it to 0 in the patching step below.
     skip_cols = {"complainant", "respondent", "third_party", "wto_participant",
                  "cum_complainant", "cum_respondent", "cum_third_party",
                  "wto_member", "wto_accession_year",
-                 "eu_member", "euro_join_year", "euro_member"}
+                 "eu_member", "euro_join_year", "euro_member",
+                 "election_binary"}
 
     sum_cols = ["pop"]   # sum across EU members
     avg_cols = [c for c in num_cols
@@ -560,9 +565,12 @@ def build_ergm_eun(dyadic_enriched, annual_counts, tp_covariates, eun_node_attrs
             eun_merged = eun_merged.drop(columns=[agg_col])
 
     # Hard overrides regardless of existing values
-    eun_merged["eu_member"]      = 1
-    eun_merged["euro_join_year"] = 1999
-    eun_merged["euro_member"]    = (eun_merged["year"] >= 1999).astype(int)
+    eun_merged["eu_member"]       = 1
+    eun_merged["euro_join_year"]  = 1999
+    eun_merged["euro_member"]     = (eun_merged["year"] >= 1999).astype(int)
+    # EU Parliament elections are supranational; set to 0 (not a national election)
+    if "election_binary" in eun_merged.columns:
+        eun_merged["election_binary"] = 0
 
     meta = pd.concat([meta, eun_merged], ignore_index=True)
 

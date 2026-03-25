@@ -15,7 +15,8 @@
 #   Model S0 : SERGM-NoEUN — national-state baseline (no EUN)
 #   Model S1 : SERGM-Full  — structural balance + trade + node covariates
 #   Model S2 : SERGM-Full  — + political alignment (ideal point distance)
-#   Model S3 : SERGM-Ip    — + democracy (ip-complete node set; also V-Dem complete)
+#   Model S3 : SERGM-IpDem — + democracy (ip+dem-complete node set; drops nodes
+#              missing EITHER idealpointfp OR v2x_polyarchy)
 #
 # ergm.sign API (Fritz et al. 2025, Political Analysis):
 #   Main functions : tsergm() [temporal], sergm() [static]
@@ -93,8 +94,7 @@ cat("Relationships:\n"); print(table(wto_dyadic$relationship))
 # ===========================================================================
 
 # Trade
-for (v in c("total_trade_ij", "export_dependence", "trade_dependence",
-            "total_trade_ij_t1", "total_trade_ij_t2", "total_trade_ij_t3")) {
+for (v in c("total_trade_ij", "export_dependence", "trade_dependence")) {
   if (v %in% names(ergm_panel)) ergm_panel[[v]][is.na(ergm_panel[[v]])] <- 0
 }
 
@@ -112,7 +112,7 @@ if ("depth_index" %in% names(ergm_panel)) {
 }
 
 # ATOP
-for (v in c("atopally", "defense", "offense", "neutral", "nonagg", "consul")) {
+for (v in c("atopally")) {
   if (v %in% names(ergm_panel)) ergm_panel[[v]][is.na(ergm_panel[[v]])] <- 0
 }
 
@@ -273,11 +273,11 @@ cat("\nFull node set:", n_nodes,
     "| Democracy-complete:", n_nodes_dem_s, "\n")
 
 # ---------------------------------------------------------------------------
-# Ideal-point-complete node set (Models S2 and S3)
+# Ideal-point-complete node set (Model S2)
 #
 # Same rationale as TERGM: idealpointfp is structurally missing for non-UN
 # members (Taiwan, Kosovo, micro-states). 0 is a valid value on the scale;
-# we drop instead of imputing. ip-complete is also V-Dem complete (verified).
+# we drop instead of imputing. Model S2 only needs ideal-point completeness.
 # ---------------------------------------------------------------------------
 
 REQUIRED_NODE_VARS_IP <- c("idealpointfp")
@@ -285,8 +285,7 @@ REQUIRED_NODE_VARS_IP <- c("idealpointfp")
 country_meta_ip_s <- country_meta %>%
   group_by(iso3c) %>%
   arrange(year) %>%
-  fill(all_of(intersect(c(REQUIRED_NODE_VARS_IP, REQUIRED_NODE_VARS_DEM),
-                        names(country_meta))),
+  fill(all_of(intersect(REQUIRED_NODE_VARS_IP, names(country_meta))),
        .direction = "downup") %>%
   ungroup()
 
@@ -296,7 +295,7 @@ nodes_missing_ip_s <- country_meta_ip_s %>%
   unique()
 
 if (length(nodes_missing_ip_s) > 0) {
-  cat("\nIdeal-point-complete (SERGM): dropping", length(nodes_missing_ip_s),
+  cat("\nIdeal-point-complete (Model S2): dropping", length(nodes_missing_ip_s),
       "nodes missing idealpointfp:\n ",
       paste(sort(nodes_missing_ip_s), collapse = ", "), "\n")
 } else {
@@ -316,29 +315,53 @@ n_nodes_ip_s       <- length(all_nodes_ip_s)
 cat("Ideal-point-complete node set (SERGM):", n_nodes_ip_s,
     "(dropped", n_nodes - n_nodes_ip_s, "from full set)\n")
 
-# Verify ip-complete is also V-Dem complete (required for Model S3)
-vdem_still_na_s <- country_meta_ip_s %>%
-  filter(if_any(all_of(intersect(REQUIRED_NODE_VARS_DEM, names(country_meta_ip_s))), is.na)) %>%
+# ---------------------------------------------------------------------------
+# Ip+Dem-complete node set (Model S3)
+#
+# Model S3 requires both idealpointfp and v2x_polyarchy.
+# Some UN members have ideal points but no V-Dem (small island states).
+# These appear in signed_net_list_ip_s (S2) but must be dropped for S3.
+# ---------------------------------------------------------------------------
+
+country_meta_ip_dem_s <- country_meta %>%
+  group_by(iso3c) %>%
+  arrange(year) %>%
+  fill(all_of(intersect(c(REQUIRED_NODE_VARS_IP, REQUIRED_NODE_VARS_DEM),
+                        names(country_meta))),
+       .direction = "downup") %>%
+  ungroup()
+
+nodes_missing_ip_dem_s <- country_meta_ip_dem_s %>%
+  filter(if_any(all_of(intersect(c(REQUIRED_NODE_VARS_IP, REQUIRED_NODE_VARS_DEM),
+                                 names(country_meta_ip_dem_s))), is.na)) %>%
   pull(iso3c) %>%
   unique()
-if (length(vdem_still_na_s) > 0) {
-  cat("WARNING (SERGM): ip-complete set still has", length(vdem_still_na_s),
-      "nodes missing V-Dem:", paste(sort(vdem_still_na_s), collapse = ", "), "\n")
-  nodes_missing_ip_s <- union(nodes_missing_ip_s, vdem_still_na_s)
-  signed_agg_ip_s    <- signed_agg_clean %>%
-    filter(!node_a %in% nodes_missing_ip_s, !node_b %in% nodes_missing_ip_s)
-  ergm_panel_ip_s    <- ergm_panel %>%
-    filter(!exporter %in% nodes_missing_ip_s, !importer %in% nodes_missing_ip_s)
-  country_meta_ip_s  <- country_meta_ip_s %>% filter(!iso3c %in% nodes_missing_ip_s)
-  severity_agg_ip_s  <- severity_agg_clean %>%
-    filter(!node_a %in% nodes_missing_ip_s, !node_b %in% nodes_missing_ip_s)
-  all_nodes_ip_s     <- sort(unique(c(signed_agg_ip_s$node_a, signed_agg_ip_s$node_b)))
-  n_nodes_ip_s       <- length(all_nodes_ip_s)
-  cat("  Final ip-complete node set:", n_nodes_ip_s, "\n")
+
+if (length(nodes_missing_ip_dem_s) > 0) {
+  cat("\nIp+Dem-complete (Model S3): dropping", length(nodes_missing_ip_dem_s),
+      "nodes missing idealpointfp or v2x_polyarchy:\n ",
+      paste(sort(nodes_missing_ip_dem_s), collapse = ", "), "\n")
 } else {
-  cat("V-Dem check (SERGM): ip-complete set is also V-Dem complete.",
-      "Models S2 and S3 share signed_net_list_ip_s.\n")
+  cat("\nIp+Dem-complete (SERGM): no nodes dropped.\n")
 }
+
+signed_agg_ip_dem_s    <- signed_agg_clean %>%
+  filter(!node_a %in% nodes_missing_ip_dem_s, !node_b %in% nodes_missing_ip_dem_s)
+ergm_panel_ip_dem_s    <- ergm_panel %>%
+  filter(!exporter %in% nodes_missing_ip_dem_s, !importer %in% nodes_missing_ip_dem_s)
+country_meta_ip_dem_s  <- country_meta_ip_dem_s %>%
+  filter(!iso3c %in% nodes_missing_ip_dem_s)
+severity_agg_ip_dem_s  <- severity_agg_clean %>%
+  filter(!node_a %in% nodes_missing_ip_dem_s, !node_b %in% nodes_missing_ip_dem_s)
+all_nodes_ip_dem_s     <- sort(unique(c(signed_agg_ip_dem_s$node_a,
+                                        signed_agg_ip_dem_s$node_b)))
+n_nodes_ip_dem_s       <- length(all_nodes_ip_dem_s)
+
+cat("Ip+Dem-complete node set (SERGM):", n_nodes_ip_dem_s,
+    "(dropped", n_nodes - n_nodes_ip_dem_s, "from full set)\n")
+cat("Nodes in S2 but not S3 (have idealpoint, lack V-Dem):",
+    length(setdiff(all_nodes_ip_s, all_nodes_ip_dem_s)), ":",
+    paste(sort(setdiff(all_nodes_ip_s, all_nodes_ip_dem_s)), collapse = ", "), "\n")
 
 # ===========================================================================
 # 5. SIGNED NETWORK BUILDER
@@ -374,6 +397,10 @@ build_signed_nets <- function(edges_agg, panel, meta, nodes, severity_agg = NULL
   pop_cov_s         <- list()
   activity_cov_s    <- list()   # cum_complainant + cum_respondent
   vdem_cov_s        <- list()   # v2x_polyarchy (NA -> 0 if not dem-complete set)
+  # Absolute difference matrices M[i,j] = |v[i] - v[j]|
+  # (analogous to absdiff() in btergm; captures economic/size gap between dyad)
+  gdp_diff_cov_s    <- list()
+  pop_diff_cov_s    <- list()
   node_attr_list    <- list()
 
   for (yr in years) {
@@ -452,6 +479,14 @@ build_signed_nets <- function(edges_agg, panel, meta, nodes, severity_agg = NULL
       diag(m) <- 0
       m
     }
+    # M[i,j] = |v[i] - v[j]|  (analogous to absdiff() in btergm)
+    safe_diff_mat <- function(v) {
+      v[is.na(v)] <- 0
+      m <- outer(v, v, function(a, b) abs(a - b))
+      rownames(m) <- colnames(m) <- nodes
+      diag(m) <- 0
+      m
+    }
 
     gdp_vec      <- if ("log_gdppc" %in% names(node_df)) node_df$log_gdppc
                     else rep(0, n)
@@ -480,6 +515,8 @@ build_signed_nets <- function(edges_agg, panel, meta, nodes, severity_agg = NULL
     pop_cov_s[[yr_key]]          <- safe_sum_mat(pop_vec)
     activity_cov_s[[yr_key]]     <- safe_sum_mat(act_vec)
     vdem_cov_s[[yr_key]]         <- safe_sum_mat(vdem_vec)
+    gdp_diff_cov_s[[yr_key]]     <- safe_diff_mat(gdp_vec)
+    pop_diff_cov_s[[yr_key]]     <- safe_diff_mat(pop_vec)
     node_attr_list[[yr_key]]     <- node_df
   }
   cat("\n")
@@ -497,6 +534,8 @@ build_signed_nets <- function(edges_agg, panel, meta, nodes, severity_agg = NULL
        pop_cov_s         = pop_cov_s,
        activity_cov_s    = activity_cov_s,
        vdem_cov_s        = vdem_cov_s,
+       gdp_diff_cov_s    = gdp_diff_cov_s,
+       pop_diff_cov_s    = pop_diff_cov_s,
        node_attr_list    = node_attr_list)
 }
 
@@ -513,10 +552,15 @@ noeun_s <- build_signed_nets(signed_agg_noeun, ergm_panel_noeun,
                              country_meta_noeun, all_nodes_noeun,
                              severity_agg_noeun)
 
-cat("\n=== Building IP-COMPLETE signed network list (Models S2 & S3) ===\n")
+cat("\n=== Building IP-COMPLETE signed network list (Model S2) ===\n")
 ip_s <- build_signed_nets(signed_agg_ip_s, ergm_panel_ip_s,
                           country_meta_ip_s, all_nodes_ip_s,
                           severity_agg_ip_s)
+
+cat("\n=== Building IP+DEM-COMPLETE signed network list (Model S3) ===\n")
+ip_dem_s <- build_signed_nets(signed_agg_ip_dem_s, ergm_panel_ip_dem_s,
+                              country_meta_ip_dem_s, all_nodes_ip_dem_s,
+                              severity_agg_ip_dem_s)
 
 # Unpack full
 signed_net_list    <- full_s$signed_net_list
@@ -532,6 +576,8 @@ gdp_cov_s          <- full_s$gdp_cov_s
 pop_cov_s          <- full_s$pop_cov_s
 activity_cov_s     <- full_s$activity_cov_s
 vdem_cov_s         <- full_s$vdem_cov_s
+gdp_diff_cov_s     <- full_s$gdp_diff_cov_s
+pop_diff_cov_s     <- full_s$pop_diff_cov_s
 
 # Unpack no-EUN
 signed_net_list_noeun    <- noeun_s$signed_net_list
@@ -546,8 +592,10 @@ severity_cov_s_noeun     <- noeun_s$severity_cov_s
 gdp_cov_s_noeun          <- noeun_s$gdp_cov_s
 pop_cov_s_noeun          <- noeun_s$pop_cov_s
 activity_cov_s_noeun     <- noeun_s$activity_cov_s
+gdp_diff_cov_s_noeun     <- noeun_s$gdp_diff_cov_s
+pop_diff_cov_s_noeun     <- noeun_s$pop_diff_cov_s
 
-# Unpack ip-complete
+# Unpack ip-complete (Model S2)
 signed_net_list_ip_s    <- ip_s$signed_net_list
 trade_cov_s_ip_s        <- ip_s$trade_cov_s
 ally_cov_s_ip_s         <- ip_s$ally_cov_s
@@ -561,6 +609,25 @@ gdp_cov_s_ip_s          <- ip_s$gdp_cov_s
 pop_cov_s_ip_s          <- ip_s$pop_cov_s
 activity_cov_s_ip_s     <- ip_s$activity_cov_s
 vdem_cov_s_ip_s         <- ip_s$vdem_cov_s
+gdp_diff_cov_s_ip_s     <- ip_s$gdp_diff_cov_s
+pop_diff_cov_s_ip_s     <- ip_s$pop_diff_cov_s
+
+# Unpack ip+dem-complete (Model S3)
+signed_net_list_ip_dem_s   <- ip_dem_s$signed_net_list
+trade_cov_s_ip_dem_s       <- ip_dem_s$trade_cov_s
+ally_cov_s_ip_dem_s        <- ip_dem_s$ally_cov_s
+pta_cov_s_ip_dem_s         <- ip_dem_s$pta_cov_s
+ideal_dist_cov_s_ip_dem_s  <- ip_dem_s$ideal_dist_cov_s
+hhi_cov_s_ip_dem_s         <- ip_dem_s$hhi_cov_s
+export_conc_cov_s_ip_dem_s <- ip_dem_s$export_conc_cov_s
+import_dep_cov_s_ip_dem_s  <- ip_dem_s$import_dep_cov_s
+severity_cov_s_ip_dem_s    <- ip_dem_s$severity_cov_s
+gdp_cov_s_ip_dem_s         <- ip_dem_s$gdp_cov_s
+pop_cov_s_ip_dem_s         <- ip_dem_s$pop_cov_s
+activity_cov_s_ip_dem_s    <- ip_dem_s$activity_cov_s
+vdem_cov_s_ip_dem_s        <- ip_dem_s$vdem_cov_s
+gdp_diff_cov_s_ip_dem_s    <- ip_dem_s$gdp_diff_cov_s
+pop_diff_cov_s_ip_dem_s    <- ip_dem_s$pop_diff_cov_s
 
 # Diagnostics
 cat("\n--- Signed network diagnostics ---\n")
@@ -630,6 +697,8 @@ if (ERGM_SIGN_AVAILABLE) {
       cov_dyad_neg(data = severity_cov_s_noeun) +  # conflict intensity -> negative only
       cov_dyad(data = gdp_cov_s_noeun) +
       cov_dyad(data = pop_cov_s_noeun) +
+      cov_dyad(data = gdp_diff_cov_s_noeun) +     # |log_gdppc_i - log_gdppc_j| (economic gap)
+      cov_dyad(data = pop_diff_cov_s_noeun) +     # |log_pop_i - log_pop_j| (size gap)
       cov_dyad(data = activity_cov_s_noeun),
     control = SERGM_CONTROL
   )
@@ -656,6 +725,8 @@ if (ERGM_SIGN_AVAILABLE) {
       cov_dyad_neg(data = severity_cov_s) +
       cov_dyad(data = gdp_cov_s) +
       cov_dyad(data = pop_cov_s) +
+      cov_dyad(data = gdp_diff_cov_s) +           # |log_gdppc_i - log_gdppc_j|
+      cov_dyad(data = pop_diff_cov_s) +           # |log_pop_i - log_pop_j|
       cov_dyad(data = activity_cov_s),
     control = SERGM_CONTROL
   )
@@ -684,37 +755,41 @@ if (ERGM_SIGN_AVAILABLE) {
       cov_dyad_neg(data = ideal_dist_cov_s_ip_s) +  # political distance -> disputes
       cov_dyad(data = gdp_cov_s_ip_s) +
       cov_dyad(data = pop_cov_s_ip_s) +
+      cov_dyad(data = gdp_diff_cov_s_ip_s) +        # |log_gdppc_i - log_gdppc_j|
+      cov_dyad(data = pop_diff_cov_s_ip_s) +        # |log_pop_i - log_pop_j|
       cov_dyad(data = activity_cov_s_ip_s),
     control = SERGM_CONTROL
   )
   cat("\n--- Model S2 ---\n"); print(sergm_s2)
 
-  # ---- Model S3: + Democracy (ip-complete node set; also V-Dem complete) ----
-  # Reuses signed_net_list_ip_s: ip-complete is verified to be V-Dem complete above.
-  # vdem_cov_s_ip_s = sum of v2x_polyarchy for dyad (M[i,j] = vdem[i] + vdem[j]).
-  cat("\n=== Model S3: + Democracy (n =", n_nodes_ip_s, "nodes) ===\n")
+  # ---- Model S3: + Democracy (ip+dem-complete node set) ----
+  # Separate from S2: drops nodes missing EITHER idealpointfp OR v2x_polyarchy.
+  # vdem_cov_s_ip_dem_s = sum of v2x_polyarchy for dyad (M[i,j] = vdem[i]+vdem[j]).
+  cat("\n=== Model S3: + Democracy (ip+dem-complete, n =", n_nodes_ip_dem_s, "nodes) ===\n")
   sergm_s3 <- tsergm(
-    signed_net_list_ip_s ~
+    signed_net_list_ip_dem_s ~
       edges_pos +
       edges_neg +
       gwdegree_pos(data = matrix(ALPHA)) +
       gwdegree_neg(data = matrix(ALPHA)) +
       gwesf_pos(data = matrix(ALPHA)) +
       gwese_pos(data = matrix(ALPHA)) +
-      cov_dyad(data = trade_cov_s_ip_s) +
-      cov_dyad_pos(data = ally_cov_s_ip_s) +
-      cov_dyad_neg(data = ally_cov_s_ip_s) +
-      cov_dyad_pos(data = pta_cov_s_ip_s) +
-      cov_dyad_neg(data = pta_cov_s_ip_s) +
-      cov_dyad_neg(data = hhi_cov_s_ip_s) +
-      cov_dyad_neg(data = export_conc_cov_s_ip_s) +
-      cov_dyad_neg(data = import_dep_cov_s_ip_s) +
-      cov_dyad_neg(data = severity_cov_s_ip_s) +
-      cov_dyad_neg(data = ideal_dist_cov_s_ip_s) +
-      cov_dyad(data = gdp_cov_s_ip_s) +
-      cov_dyad(data = pop_cov_s_ip_s) +
-      cov_dyad(data = activity_cov_s_ip_s) +
-      cov_dyad(data = vdem_cov_s_ip_s),    # democracy dyadic sum (no NAs; ip-complete)
+      cov_dyad(data = trade_cov_s_ip_dem_s) +
+      cov_dyad_pos(data = ally_cov_s_ip_dem_s) +
+      cov_dyad_neg(data = ally_cov_s_ip_dem_s) +
+      cov_dyad_pos(data = pta_cov_s_ip_dem_s) +
+      cov_dyad_neg(data = pta_cov_s_ip_dem_s) +
+      cov_dyad_neg(data = hhi_cov_s_ip_dem_s) +
+      cov_dyad_neg(data = export_conc_cov_s_ip_dem_s) +
+      cov_dyad_neg(data = import_dep_cov_s_ip_dem_s) +
+      cov_dyad_neg(data = severity_cov_s_ip_dem_s) +
+      cov_dyad_neg(data = ideal_dist_cov_s_ip_dem_s) +
+      cov_dyad(data = gdp_cov_s_ip_dem_s) +
+      cov_dyad(data = pop_cov_s_ip_dem_s) +
+      cov_dyad(data = gdp_diff_cov_s_ip_dem_s) +    # |log_gdppc_i - log_gdppc_j|
+      cov_dyad(data = pop_diff_cov_s_ip_dem_s) +    # |log_pop_i - log_pop_j|
+      cov_dyad(data = activity_cov_s_ip_dem_s) +
+      cov_dyad(data = vdem_cov_s_ip_dem_s),    # democracy dyadic sum (no NAs)
     control = SERGM_CONTROL
   )
   cat("\n--- Model S3 ---\n"); print(sergm_s3)
@@ -746,21 +821,32 @@ save(
   signed_net_list,
   trade_cov_s, ally_cov_s, pta_cov_s, ideal_dist_cov_s,
   hhi_cov_s, export_conc_cov_s, import_dep_cov_s, severity_cov_s,
-  gdp_cov_s, pop_cov_s, activity_cov_s, vdem_cov_s,
+  gdp_cov_s, pop_cov_s, gdp_diff_cov_s, pop_diff_cov_s,
+  activity_cov_s, vdem_cov_s,
   all_nodes, n_nodes,
   # No-EUN
   signed_net_list_noeun,
   trade_cov_s_noeun, ally_cov_s_noeun, pta_cov_s_noeun, ideal_dist_cov_s_noeun,
   hhi_cov_s_noeun, export_conc_cov_s_noeun, import_dep_cov_s_noeun,
-  severity_cov_s_noeun, gdp_cov_s_noeun, pop_cov_s_noeun, activity_cov_s_noeun,
+  severity_cov_s_noeun, gdp_cov_s_noeun, pop_cov_s_noeun,
+  gdp_diff_cov_s_noeun, pop_diff_cov_s_noeun, activity_cov_s_noeun,
   all_nodes_noeun, n_nodes_noeun,
-  # Ip-complete (Models S2 & S3)
+  # Ip-complete (Model S2)
   signed_net_list_ip_s,
   trade_cov_s_ip_s, ally_cov_s_ip_s, pta_cov_s_ip_s, ideal_dist_cov_s_ip_s,
   hhi_cov_s_ip_s, export_conc_cov_s_ip_s, import_dep_cov_s_ip_s,
-  severity_cov_s_ip_s, gdp_cov_s_ip_s, pop_cov_s_ip_s, activity_cov_s_ip_s,
+  severity_cov_s_ip_s, gdp_cov_s_ip_s, pop_cov_s_ip_s,
+  gdp_diff_cov_s_ip_s, pop_diff_cov_s_ip_s, activity_cov_s_ip_s,
   vdem_cov_s_ip_s,
   all_nodes_ip_s, n_nodes_ip_s, nodes_missing_ip_s,
+  # Ip+Dem-complete (Model S3)
+  signed_net_list_ip_dem_s,
+  trade_cov_s_ip_dem_s, ally_cov_s_ip_dem_s, pta_cov_s_ip_dem_s,
+  ideal_dist_cov_s_ip_dem_s, hhi_cov_s_ip_dem_s, export_conc_cov_s_ip_dem_s,
+  import_dep_cov_s_ip_dem_s, severity_cov_s_ip_dem_s, gdp_cov_s_ip_dem_s,
+  pop_cov_s_ip_dem_s, gdp_diff_cov_s_ip_dem_s, pop_diff_cov_s_ip_dem_s,
+  activity_cov_s_ip_dem_s, vdem_cov_s_ip_dem_s,
+  all_nodes_ip_dem_s, n_nodes_ip_dem_s, nodes_missing_ip_dem_s,
   # Shared
   years,
   file = "Data/Output/sergm_prepared_data.RData"

@@ -14,8 +14,8 @@
 #   Model 0 : Baseline, EUN EXCLUDED (pure national-state benchmark)
 #   Model 1 : Full node set (incl. EUN) — structural + trade
 #   Model 2 : + Political alignment (ideal point distance)
-#   Model 3 : + Democracy & governance — ip-complete node set (same as Model 2;
-#             ip-complete is also V-Dem complete; verified at runtime)
+#   Model 3 : + Democracy & governance — ip+dem-complete node set (drops nodes
+#             missing EITHER idealpointfp OR v2x_polyarchy after carry-forward)
 #   Model 1L: Model 1 + lagged trade (t-1) as robustness check
 #
 # Data issues fixed vs prior version:
@@ -71,10 +71,7 @@ cat("EUN rows in country_meta:", sum(country_meta$iso3c == "EUN"), "\n")
 # max_reverse_dep has ~9% NAs (one-way flows with no reverse trade) — treated as 0.
 trade_vars <- c("total_trade_ij",  "export_dependence",  "trade_dependence",
                 "n_products_ij",   "n_sections_ij",
-                "total_trade_ij_t1", "export_dependence_t1", "trade_dependence_t1",
-                "total_trade_ij_t2", "total_trade_ij_t3",
-                "trade_hhi",       "max_export_conc",    "max_reverse_dep",
-                "trade_hhi_t1",    "max_export_conc_t1", "max_reverse_dep_t1")
+                "trade_hhi",       "max_export_conc",    "max_reverse_dep")
 for (v in trade_vars) {
   if (v %in% names(ergm_panel)) ergm_panel[[v]][is.na(ergm_panel[[v]])] <- 0
 }
@@ -82,6 +79,8 @@ for (v in trade_vars) {
 # --- 2b. DESTA / PTA ---
 # label==1 means a PTA exists; NA means not in DESTA universe → treat as 0.
 # NOTE: label_t1/label_t2/depth_index_t1 etc. are NOT in the dataset.
+# Manual check: This approach make sense since it just the missing value basically means the PTA record is not accessible
+# It has 4000 (<1% missing value)
 if ("label" %in% names(ergm_panel)) {
   ergm_panel$pta_exists <- ifelse(is.na(ergm_panel$label), 0L, as.integer(ergm_panel$label))
 }
@@ -92,13 +91,16 @@ if ("depth_index" %in% names(ergm_panel)) {
 # --- 2c. ATOP alliance: NA -> 0 ---
 # NOTE: atopally_t1/t2/t3 are NOT pre-computed in ergm_dyad_year_eun.csv.
 #       Only the contemporaneous atopally is available.
-atop_vars <- c("atopally", "defense", "offense", "neutral", "nonagg", "consul")
+# Use atopally as the variable
+atop_vars <- c("atopally")
 for (v in atop_vars) {
   if (v %in% names(ergm_panel)) ergm_panel[[v]][is.na(ergm_panel[[v]])] <- 0
 }
 
 # --- 2d. Severity scores: NA -> 0 ---
-sev_vars <- grep("severity|rhetorical|systemic|escalation|domestic_victim",
+# Not using all of the variables severity|rhetorical|systemic|escalation|domestic_victim\
+# severity is the average of 4 dimensions
+sev_vars <- grep("severity",
                  names(ergm_panel), value = TRUE)
 for (v in sev_vars) ergm_panel[[v]][is.na(ergm_panel[[v]])] <- 0
 
@@ -107,7 +109,7 @@ for (v in grep("^disputed_", names(ergm_panel), value = TRUE)) {
   ergm_panel[[v]][is.na(ergm_panel[[v]])] <- 0
 }
 
-# --- 2f. Node attributes ---
+# --- 2f. V-dem election node attributes ---
 # election_binary: NA -> 0
 if ("election_binary" %in% names(country_meta)) {
   country_meta$election_binary[is.na(country_meta$election_binary)] <- 0
@@ -122,7 +124,7 @@ country_meta <- country_meta %>%
   fill(all_of(intersect(node_impute_vars, names(country_meta))), .direction = "downup") %>%
   ungroup()
 
-# cum_* / n_*_t: NA -> 0
+# cum_* / n_*_t: NA -> 0 (some members joined after 1995)
 for (v in grep("^cum_|^n_complainant_t|^n_respondent_t|^n_tp_t",
                names(country_meta), value = TRUE)) {
   country_meta[[v]][is.na(country_meta[[v]])] <- 0
@@ -216,7 +218,8 @@ if (length(nodes_missing_vdem) > 0) {
 } else {
   cat("\nDemocracy-complete: no nodes dropped (v2x_polyarchy complete).\n")
 }
-
+# drop 21 nodes from the country panel data (196countries): 
+# AND, ATG, BHS, BLZ, BRN, DMA, FSM, GRD, KIR, KNA, LCA, LIE, MCO, MHL, NRU, PLW, SMR, TON, TUV, VCT, WSM 
 ergm_panel_dem   <- ergm_panel     %>% filter(!exporter %in% nodes_missing_vdem,
                                                !importer %in% nodes_missing_vdem)
 country_meta_dem <- country_meta_dem %>% filter(!iso3c %in% nodes_missing_vdem)
@@ -228,15 +231,12 @@ cat("Democracy-complete node set:", n_nodes_dem,
 cat("Democracy-complete dyad-years:", nrow(ergm_panel_dem), "\n")
 
 # ---------------------------------------------------------------------------
-# Ideal-point-complete node set (Models 2 and 3)
+# Ideal-point-complete node set (Model 2)
 #
 # idealpointfp is structurally missing for non-UN members (Taiwan, Kosovo,
 # Vatican, some micro-states). Because 0 is a valid substantive value on the
 # -2 to +3 ideal-point scale, imputation is not appropriate; drop instead.
-#
-# V-Dem covers a wider country set than UN ideal points, so the ip-complete
-# set is also V-Dem complete in practice. We verify this below and warn if
-# any exceptions exist; any such nodes are additionally dropped before Model 3.
+# Model 2 only needs ideal-point completeness; V-Dem is NOT required here.
 # ---------------------------------------------------------------------------
 
 REQUIRED_NODE_VARS_IP <- c("idealpointfp")
@@ -244,8 +244,7 @@ REQUIRED_NODE_VARS_IP <- c("idealpointfp")
 country_meta_ip <- country_meta %>%
   group_by(iso3c) %>%
   arrange(year) %>%
-  fill(all_of(intersect(c(REQUIRED_NODE_VARS_IP, REQUIRED_NODE_VARS_DEM),
-                        names(country_meta))),
+  fill(all_of(intersect(REQUIRED_NODE_VARS_IP, names(country_meta))),
        .direction = "downup") %>%
   ungroup()
 
@@ -255,7 +254,7 @@ nodes_missing_ip <- country_meta_ip %>%
   unique()
 
 if (length(nodes_missing_ip) > 0) {
-  cat("\nIdeal-point-complete: dropping", length(nodes_missing_ip),
+  cat("\nIdeal-point-complete (Model 2): dropping", length(nodes_missing_ip),
       "nodes missing idealpointfp:\n ",
       paste(sort(nodes_missing_ip), collapse = ", "), "\n")
 } else {
@@ -270,28 +269,50 @@ n_nodes_ip      <- length(all_nodes_ip)
 
 cat("Ideal-point-complete node set:", n_nodes_ip,
     "(dropped", n_nodes - n_nodes_ip, "from full set)\n")
-cat("Ideal-point-complete dyad-years:", nrow(ergm_panel_ip), "\n")
 
-# Verify ip-complete is also V-Dem complete (required for Model 3 v2x_polyarchy)
-vdem_still_na <- country_meta_ip %>%
-  filter(if_any(all_of(intersect(REQUIRED_NODE_VARS_DEM, names(country_meta_ip))), is.na)) %>%
+# ---------------------------------------------------------------------------
+# Ideal-point-AND-V-Dem-complete node set (Model 3)
+#
+# Model 3 requires both idealpointfp and v2x_polyarchy.
+# Some UN members (e.g., small Pacific island states, micro-states) have ideal
+# points but no V-Dem coverage. These are IN net_list_ip (Model 2) but must be
+# dropped for Model 3. The two sets are distinct and built separately.
+# ---------------------------------------------------------------------------
+
+country_meta_ip_dem <- country_meta %>%
+  group_by(iso3c) %>%
+  arrange(year) %>%
+  fill(all_of(intersect(c(REQUIRED_NODE_VARS_IP, REQUIRED_NODE_VARS_DEM),
+                        names(country_meta))),
+       .direction = "downup") %>%
+  ungroup()
+
+nodes_missing_ip_dem <- country_meta_ip_dem %>%
+  filter(if_any(all_of(intersect(c(REQUIRED_NODE_VARS_IP, REQUIRED_NODE_VARS_DEM),
+                                 names(country_meta_ip_dem))), is.na)) %>%
   pull(iso3c) %>%
   unique()
-if (length(vdem_still_na) > 0) {
-  cat("WARNING: ip-complete set still has", length(vdem_still_na),
-      "nodes missing V-Dem:", paste(sort(vdem_still_na), collapse = ", "), "\n")
-  cat("  Dropping these additionally for Model 3 compatibility.\n")
-  nodes_missing_ip <- union(nodes_missing_ip, vdem_still_na)
-  ergm_panel_ip    <- ergm_panel %>% filter(!exporter %in% nodes_missing_ip,
-                                             !importer %in% nodes_missing_ip)
-  country_meta_ip  <- country_meta_ip %>% filter(!iso3c %in% nodes_missing_ip)
-  all_nodes_ip     <- sort(unique(c(ergm_panel_ip$exporter, ergm_panel_ip$importer)))
-  n_nodes_ip       <- length(all_nodes_ip)
-  cat("  Final ip-complete node set:", n_nodes_ip, "\n")
+
+if (length(nodes_missing_ip_dem) > 0) {
+  cat("\nIp+Dem-complete (Model 3): dropping", length(nodes_missing_ip_dem),
+      "nodes missing idealpointfp or v2x_polyarchy:\n ",
+      paste(sort(nodes_missing_ip_dem), collapse = ", "), "\n")
 } else {
-  cat("V-Dem check: ip-complete set is also V-Dem complete.",
-      "Models 2 and 3 share net_list_ip.\n")
+  cat("\nIp+Dem-complete: no nodes dropped.\n")
 }
+
+ergm_panel_ip_dem   <- ergm_panel %>% filter(!exporter %in% nodes_missing_ip_dem,
+                                               !importer %in% nodes_missing_ip_dem)
+country_meta_ip_dem <- country_meta_ip_dem %>% filter(!iso3c %in% nodes_missing_ip_dem)
+all_nodes_ip_dem    <- sort(unique(c(ergm_panel_ip_dem$exporter, ergm_panel_ip_dem$importer)))
+n_nodes_ip_dem      <- length(all_nodes_ip_dem)
+
+cat("Ip+Dem-complete node set:", n_nodes_ip_dem,
+    "(dropped", n_nodes - n_nodes_ip_dem, "from full set)\n")
+cat("Ip+Dem-complete dyad-years:", nrow(ergm_panel_ip_dem), "\n")
+cat("Nodes in ip but not ip_dem (have idealpoint, lack V-Dem):",
+    length(setdiff(all_nodes_ip, all_nodes_ip_dem)), ":",
+    paste(sort(setdiff(all_nodes_ip, all_nodes_ip_dem)), collapse = ", "), "\n")
 
 # ===========================================================================
 # 4. NETWORK BUILDER HELPER
@@ -419,8 +440,11 @@ full <- build_net_list(ergm_panel, country_meta, all_nodes, years)
 cat("\n=== Building NO-EUN network list ===\n")
 noeun <- build_net_list(ergm_panel_noeun, country_meta_noeun, all_nodes_noeun, years)
 
-cat("\n=== Building IP-COMPLETE network list (Models 2 & 3) ===\n")
+cat("\n=== Building IP-COMPLETE network list (Model 2) ===\n")
 ip <- build_net_list(ergm_panel_ip, country_meta_ip, all_nodes_ip, years)
+
+cat("\n=== Building IP+DEM-COMPLETE network list (Model 3) ===\n")
+ip_dem <- build_net_list(ergm_panel_ip_dem, country_meta_ip_dem, all_nodes_ip_dem, years)
 
 # Unpack for convenience
 net_list        <- full$net_list
@@ -455,6 +479,17 @@ hhi_cov_ip         <- ip$hhi_cov
 export_conc_cov_ip <- ip$export_conc_cov
 import_dep_cov_ip  <- ip$import_dep_cov
 
+net_list_ip_dem        <- ip_dem$net_list
+trade_cov_ip_dem       <- ip_dem$trade_cov
+trade_cov_t1_ip_dem    <- ip_dem$trade_cov_t1
+ally_cov_ip_dem        <- ip_dem$ally_cov
+pta_cov_ip_dem         <- ip_dem$pta_cov
+depth_cov_ip_dem       <- ip_dem$depth_cov
+ideal_dist_cov_ip_dem  <- ip_dem$ideal_dist_cov
+hhi_cov_ip_dem         <- ip_dem$hhi_cov
+export_conc_cov_ip_dem <- ip_dem$export_conc_cov
+import_dep_cov_ip_dem  <- ip_dem$import_dep_cov
+
 # Diagnostics
 cat("\n--- Network diagnostics (full) ---\n")
 for (yr in c("1995","2000","2005","2010","2015","2020","2024")) {
@@ -478,11 +513,12 @@ if (length(na_idx) > 0) {
 # 6. TERGM ESTIMATION
 # ===========================================================================
 
-BTERGM_BOOTS <- 1000   # use 200 for testing, 1000 for final run
+BTERGM_BOOTS <- 200   # use 200 for testing, 1000 for final run
 
 # --- Model 0: No-EUN baseline ---
 # The section dependence and concentration may need further
 cat("\n=== Model 0: No-EUN Baseline ===\n")
+start_time <- Sys.time()
 model0 <- btergm(
   net_list_noeun ~
     edges +
@@ -492,11 +528,17 @@ model0 <- btergm(
     edgecov(trade_cov_noeun) +
     edgecov(ally_cov_noeun) +
     edgecov(pta_cov_noeun) +
-    # edgecov(hhi_cov_noeun) +          # trade concentration across HS sections
-    # edgecov(export_conc_cov_noeun) +  # i's max section export share to j
-    # edgecov(import_dep_cov_noeun) +   # j's max section export share to i (import leverage)
-    nodecov("log_gdppc") +
-    nodecov("log_pop") +
+    edgecov(hhi_cov_noeun) +          # trade concentration across HS sections
+    edgecov(export_conc_cov_noeun) +  # i's max section export share to j
+    edgecov(import_dep_cov_noeun) +   # j's max section export share to i (import leverage)
+    # sender & receiver
+    nodeocov("log_gdppc") +     # complainant's economic standard
+    nodeicov("log_gdppc") +     # respondent's economic standard
+    nodeocov("log_pop") +       # complainant's country scale
+    nodeicov("log_pop") +       # respondent's country scale
+    # gap between sender and receiver
+    absdiff("log_gdppc") +      # economic gap
+    absdiff("log_pop") +        # population gap
     nodeicov("cum_respondent") +
     nodeocov("cum_complainant") +
     delrecip +
@@ -505,6 +547,9 @@ model0 <- btergm(
   parallel = "multicore",
   ncpus   = 4
 )
+end_time <- Sys.time()
+execution_time <- end_time - start_time
+print(execution_time)
 cat("\n--- Model 0 (No-EUN) ---\n"); summary(model0)
 
 # --- Model 1: Full node set + structural + trade ---
@@ -518,11 +563,17 @@ model1 <- btergm(
     edgecov(trade_cov) +
     edgecov(ally_cov) +
     edgecov(pta_cov) +
-    # edgecov(hhi_cov) +               # trade concentration across HS sections
-    # edgecov(export_conc_cov) +       # i's max section export share to j
-    # edgecov(import_dep_cov) +        # j's max section export share to i (import leverage)
-    nodecov("log_gdppc") +
-    nodecov("log_pop") +
+    edgecov(hhi_cov) +               # trade concentration across HS sections
+    edgecov(export_conc_cov) +       # i's max section export share to j
+    edgecov(import_dep_cov) +        # j's max section export share to i (import leverage)
+    # sender & receiver
+    nodeocov("log_gdppc") +     # complainant's economic standard
+    nodeicov("log_gdppc") +     # respondent's economic standard
+    nodeocov("log_pop") +       # complainant's country scale
+    nodeicov("log_pop") +       # respondent's country scale
+    # gap between sender and receiver
+    absdiff("log_gdppc") +      # economic gap
+    absdiff("log_pop") +        # population gap
     nodeicov("cum_respondent") +
     nodeocov("cum_complainant") +
     delrecip +
@@ -547,12 +598,18 @@ model2 <- btergm(
     edgecov(trade_cov_ip) +
     edgecov(ally_cov_ip) +
     edgecov(pta_cov_ip) +
-    # edgecov(hhi_cov_ip) +
-    # edgecov(export_conc_cov_ip) +
-    # edgecov(import_dep_cov_ip) +
+    edgecov(hhi_cov_ip) +
+    edgecov(export_conc_cov_ip) +
+    edgecov(import_dep_cov_ip) +
     edgecov(ideal_dist_cov_ip) +      # UN voting distance (idealpointfp), no NAs
-    nodecov("log_gdppc") +
-    nodecov("log_pop") +
+    # sender & receiver
+    nodeocov("log_gdppc") +     # complainant's economic standard
+    nodeicov("log_gdppc") +     # respondent's economic standard
+    nodeocov("log_pop") +       # complainant's country scale
+    nodeicov("log_pop") +       # respondent's country scale
+    # gap between sender and receiver
+    absdiff("log_gdppc") +      # economic gap
+    absdiff("log_pop") +        # population gap
     nodeicov("cum_respondent") +
     nodeocov("cum_complainant") +
     delrecip +
@@ -563,25 +620,65 @@ model2 <- btergm(
 )
 cat("\n--- Model 2 ---\n"); summary(model2)
 
-# --- Model 3: + Democracy (ip-complete node set) ---
-# Reuses net_list_ip: ip-complete is also V-Dem complete (verified above),
-# so no additional node dropping is needed. n_nodes_ip reported in console.
-cat("\n=== Model 3: + Democracy (n =", n_nodes_ip, "nodes) ===\n")
+# --- Model 2.1: only Political alignment (ideal point distance) ---
+cat("\n=== Model 2: + Political Alignment (ip-complete, n =", n_nodes_ip, "nodes) ===\n")
+model2.1 <- btergm(
+    net_list_ip ~
+        edges +
+        mutual +
+        gwidegree(decay = 0.5, fixed = TRUE) +
+        gwodegree(decay = 0.5, fixed = TRUE) +
+        edgecov(trade_cov_ip) +
+        # edgecov(ally_cov_ip) +
+        edgecov(pta_cov_ip) +
+        edgecov(hhi_cov_ip) +
+        edgecov(export_conc_cov_ip) +
+        edgecov(import_dep_cov_ip) +
+        edgecov(ideal_dist_cov_ip) +      # UN voting distance (idealpointfp), no NAs
+        # sender & receiver
+        nodeocov("log_gdppc") +     # complainant's economic standard
+        nodeicov("log_gdppc") +     # respondent's economic standard
+        nodeocov("log_pop") +       # complainant's country scale
+        nodeicov("log_pop") +       # respondent's country scale
+        # gap between sender and receiver
+        absdiff("log_gdppc") +      # economic gap
+        absdiff("log_pop") +        # population gap
+        nodeicov("cum_respondent") +
+        nodeocov("cum_complainant") +
+        delrecip +
+        memory(type = "stability"),
+    R       = BTERGM_BOOTS,
+    parallel = "multicore",
+    ncpus   = 4
+)
+cat("\n--- Model 2.1 ---\n"); summary(model2.1)
+
+# --- Model 3: + Democracy (ip+dem-complete node set) ---
+# Separate node set from Model 2: drops nodes missing EITHER idealpointfp OR
+# v2x_polyarchy. Some UN members (small Pacific islands, micro-states) have
+# ideal points but no V-Dem — they appear in net_list_ip but not here.
+cat("\n=== Model 3: + Democracy (ip+dem-complete, n =", n_nodes_ip_dem, "nodes) ===\n")
 model3 <- btergm(
-  net_list_ip ~
+  net_list_ip_dem ~
     edges +
     mutual +
     gwidegree(decay = 0.5, fixed = TRUE) +
     gwodegree(decay = 0.5, fixed = TRUE) +
-    edgecov(trade_cov_ip) +
-    edgecov(ally_cov_ip) +
-    edgecov(pta_cov_ip) +
-    # edgecov(hhi_cov_ip) +
-    # edgecov(export_conc_cov_ip) +
-    # edgecov(import_dep_cov_ip) +
-    edgecov(ideal_dist_cov_ip) +
-    nodecov("log_gdppc") +
-    nodecov("log_pop") +
+    edgecov(trade_cov_ip_dem) +
+    edgecov(ally_cov_ip_dem) +
+    edgecov(pta_cov_ip_dem) +
+    edgecov(hhi_cov_ip_dem) +
+    edgecov(export_conc_cov_ip_dem) +
+    edgecov(import_dep_cov_ip_dem) +
+    edgecov(ideal_dist_cov_ip_dem) +
+    # sender & receiver
+    nodeocov("log_gdppc") +     # complainant's economic standard
+    nodeicov("log_gdppc") +     # respondent's economic standard
+    nodeocov("log_pop") +       # complainant's country scale
+    nodeicov("log_pop") +       # respondent's country scale
+    # gap between sender and receiver
+    absdiff("log_gdppc") +      # economic gap
+    absdiff("log_pop") +        # population gap
     nodeicov("cum_respondent") +
     nodeocov("cum_complainant") +
     nodeocov("v2x_polyarchy") +       # sender democracy
@@ -624,8 +721,14 @@ model1L <- btergm(
     edgecov(hhi_cov_lag) +
     edgecov(export_conc_cov_lag) +
     edgecov(import_dep_cov_lag) +
-    nodecov("log_gdppc") +
-    nodecov("log_pop") +
+    # sender & receiver
+    nodeocov("log_gdppc") +     # complainant's economic standard
+    nodeicov("log_gdppc") +     # respondent's economic standard
+    nodeocov("log_pop") +       # complainant's country scale
+    nodeicov("log_pop") +       # respondent's country scale
+    # gap between sender and receiver
+    absdiff("log_gdppc") +      # economic gap
+    absdiff("log_pop") +        # population gap
     nodeicov("cum_respondent") +
     nodeocov("cum_complainant") +
     delrecip +
@@ -641,15 +744,15 @@ cat("\n--- Model 1L ---\n"); summary(model1L)
 # ===========================================================================
 
 screenreg(
-  list(model0, model1, model2, model3),
-  custom.model.names = c("M0: No-EUN", "M1: Full", "M2: +Align", "M3: +Demo"),
+  list(model0, model1, model2, model3, model1L),
+  custom.model.names = c("M0: No-EUN", "M1: Full", "M2: +Align", "M3: +Demo", "M4: Lagged"),
   digits = 3
 )
 
 htmlreg(
-  list(model0, model1, model2, model3),
+  list(model0, model1, model2, model3, model1L),
   file = "Data/Output/tergm_results.html",
-  custom.model.names = c("No-EUN Baseline", "Full + Trade", "+ Alignment", "+ Democracy"),
+  custom.model.names = c("No-EUN Baseline", "Full + Trade", "+ Alignment", "+ Democracy", "Lagged"),
   digits = 3,
   caption = "TERGM Results: WTO Dispute Initiation (C->R), 1995-2024"
 )
@@ -686,6 +789,12 @@ save(net_list_ip, trade_cov_ip, trade_cov_t1_ip, ally_cov_ip, pta_cov_ip,
      import_dep_cov_ip, all_nodes_ip, n_nodes_ip, nodes_missing_ip, years,
      file = "Data/Output/tergm_prepared_data_ip.RData")
 
+save(net_list_ip_dem, trade_cov_ip_dem, trade_cov_t1_ip_dem, ally_cov_ip_dem,
+     pta_cov_ip_dem, depth_cov_ip_dem, ideal_dist_cov_ip_dem, hhi_cov_ip_dem,
+     export_conc_cov_ip_dem, import_dep_cov_ip_dem,
+     all_nodes_ip_dem, n_nodes_ip_dem, nodes_missing_ip_dem, years,
+     file = "Data/Output/tergm_prepared_data_ip_dem.RData")
+
 cat("Network data saved to Data/Output/tergm_prepared_data*.RData\n")
 
 # ===========================================================================
@@ -699,8 +808,11 @@ cat("\n",
     "1. Analysis period:", YEAR_START, "-", YEAR_END, "\n",
     "2. Full node set:", n_nodes, "countries/entities (fixed across years)\n",
     "3. No-EUN node set:", n_nodes_noeun, "countries\n",
-    "   Ideal-point-complete (Models 2 & 3):", n_nodes_ip, "countries\n",
+    "   Ideal-point-complete (Model 2):", n_nodes_ip, "countries\n",
+    "   Ip+Dem-complete (Model 3):", n_nodes_ip_dem, "countries\n",
     "   Dropped for missing idealpointfp:", paste(sort(nodes_missing_ip), collapse=", "), "\n",
+    "   Additionally dropped for missing v2x_polyarchy (Model 3 only):",
+    paste(sort(setdiff(nodes_missing_ip_dem, nodes_missing_ip)), collapse=", "), "\n",
     "4. Network type: directed binary (C->R disputes only)\n",
     "5. Missing data:\n",
     "   - Trade: NA -> 0 (no bilateral trade on record)\n",
