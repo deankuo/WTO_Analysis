@@ -579,6 +579,13 @@ def build_ergm_eun(dyadic_enriched, annual_counts, tp_covariates, eun_node_attrs
     meta[["n_complainant_t","n_respondent_t","n_tp_t"]] = \
         meta[["n_complainant_t","n_respondent_t","n_tp_t"]].fillna(0).astype(int)
 
+    # Log-transformed cumulative experience variables (log1p handles zeros).
+    # These are added here so they propagate into the _1/_2 suffixed node
+    # attribute columns in the final dyad-year dataset.
+    meta["log_cum_complainant"] = np.log1p(meta["cum_complainant"].fillna(0))
+    meta["log_cum_respondent"]  = np.log1p(meta["cum_respondent"].fillna(0))
+    meta["log_cum_third_party"] = np.log1p(meta["cum_third_party"].fillna(0))
+
     # ── Dispute aggregation: max and avg severity per (exporter, importer, year) ──
     cr = dyadic_enriched[dyadic_enriched["relationship"]=="complainant-respondent"].copy()
     cr = cr.rename(columns={"iso3_1":"exporter","iso3_2":"importer"})

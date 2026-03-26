@@ -130,6 +130,12 @@ for (v in grep("^cum_|^n_complainant_t|^n_respondent_t|^n_tp_t",
   country_meta[[v]][is.na(country_meta[[v]])] <- 0
 }
 
+# Log-transformed cumulative experience variables (log1p handles zeros)
+# Three extra columns alongside the raw counts.
+country_meta$log_cum_complainant <- log1p(country_meta$cum_complainant)
+country_meta$log_cum_respondent  <- log1p(country_meta$cum_respondent)
+country_meta$log_cum_third_party <- log1p(country_meta$cum_third_party)
+
 # --- 2g. Drop nodes with residual NA in required node covariates ---
 REQUIRED_NODE_VARS <- c("log_gdppc", "log_pop", "cum_complainant", "cum_respondent")
 REQUIRED_NODE_VARS_DEM <- c("v2x_polyarchy")
@@ -346,6 +352,14 @@ build_net_list <- function(panel, meta, nodes, years) {
     df_yr <- panel %>% filter(year == yr)
 
     # --- Adjacency matrix (C -> R only) ---
+    # DIRECTION VERIFIED: in ergm_dyad_year_eun.csv,
+    #   exporter = complainant (wto_dyadic iso3_1, the filing party)
+    #   importer = respondent  (wto_dyadic iso3_2, the targeted party)
+    # build_ergm_data.py line ~584:
+    #   cr = cr.rename(columns={"iso3_1":"exporter","iso3_2":"importer"})
+    # So adj[i, j] = 1 means i (exporter/complainant) filed against j (importer/respondent).
+    # nodeocov = out-node = sender = complainant  (CORRECT)
+    # nodeicov = in-node  = receiver = respondent (CORRECT)
     adj <- matrix(0L, n, n, dimnames = list(nodes, nodes))
     for (r in which(df_yr$has_dispute == 1)) {
       i <- df_yr$exporter[r]; j <- df_yr$importer[r]
@@ -362,6 +376,7 @@ build_net_list <- function(panel, meta, nodes, years) {
                  "reg_quality", "law", "voice",
                  "idealpointfp", "idealpointall",
                  "cum_complainant", "cum_respondent", "cum_third_party",
+                 "log_cum_complainant", "log_cum_respondent", "log_cum_third_party",
                  "unemployment_rate", "gdp_growth_rate"))),
         by = "iso3c")
     for (a in setdiff(names(node_df), "iso3c")) {
@@ -539,8 +554,8 @@ model0 <- btergm(
     # gap between sender and receiver
     absdiff("log_gdppc") +      # economic gap
     absdiff("log_pop") +        # population gap
-    nodeicov("cum_respondent") +
-    nodeocov("cum_complainant") +
+    nodeicov("log_cum_respondent") +
+    nodeocov("log_cum_complainant") +
     delrecip +
     memory(type = "stability"),
   R       = BTERGM_BOOTS,
@@ -574,8 +589,8 @@ model1 <- btergm(
     # gap between sender and receiver
     absdiff("log_gdppc") +      # economic gap
     absdiff("log_pop") +        # population gap
-    nodeicov("cum_respondent") +
-    nodeocov("cum_complainant") +
+    nodeicov("log_cum_respondent") +
+    nodeocov("log_cum_complainant") +
     delrecip +
     memory(type = "stability"),
   R       = BTERGM_BOOTS,
@@ -610,8 +625,8 @@ model2 <- btergm(
     # gap between sender and receiver
     absdiff("log_gdppc") +      # economic gap
     absdiff("log_pop") +        # population gap
-    nodeicov("cum_respondent") +
-    nodeocov("cum_complainant") +
+    nodeicov("log_cum_respondent") +
+    nodeocov("log_cum_complainant") +
     delrecip +
     memory(type = "stability"),
   R       = BTERGM_BOOTS,
@@ -643,8 +658,8 @@ model2.1 <- btergm(
         # gap between sender and receiver
         absdiff("log_gdppc") +      # economic gap
         absdiff("log_pop") +        # population gap
-        nodeicov("cum_respondent") +
-        nodeocov("cum_complainant") +
+        nodeicov("log_cum_respondent") +
+        nodeocov("log_cum_complainant") +
         delrecip +
         memory(type = "stability"),
     R       = BTERGM_BOOTS,
@@ -679,8 +694,8 @@ model3 <- btergm(
     # gap between sender and receiver
     absdiff("log_gdppc") +      # economic gap
     absdiff("log_pop") +        # population gap
-    nodeicov("cum_respondent") +
-    nodeocov("cum_complainant") +
+    nodeicov("log_cum_respondent") +
+    nodeocov("log_cum_complainant") +
     nodeocov("v2x_polyarchy") +       # sender democracy
     nodeicov("v2x_polyarchy") +       # receiver democracy
     nodeocov("election_binary") +     # sender election year
@@ -729,8 +744,8 @@ model1L <- btergm(
     # gap between sender and receiver
     absdiff("log_gdppc") +      # economic gap
     absdiff("log_pop") +        # population gap
-    nodeicov("cum_respondent") +
-    nodeocov("cum_complainant") +
+    nodeicov("log_cum_respondent") +
+    nodeocov("log_cum_complainant") +
     delrecip +
     memory(type = "stability"),
   R       = BTERGM_BOOTS,
@@ -742,21 +757,221 @@ cat("\n--- Model 1L ---\n"); summary(model1L)
 # ===========================================================================
 # 7. RESULTS TABLE
 # ===========================================================================
+#
+# MODEL SPECIFICATIONS SUMMARY
+# ---------------------------------------------------------------------------
+# DV (all models): Directed binary edge = 1 if complainant (exporter) filed a
+#   WTO dispute against respondent (importer) in year t; 0 otherwise.
+#   NOTE on direction: "exporter" = complainant and "importer" = respondent
+#   throughout. The naming is inherited from the trade universe dataset.
+#   adj[i,j] = 1 means country i (exporter/complainant) filed against j
+#   (importer/respondent). nodeocov = sender = complainant; nodeicov =
+#   receiver = respondent. Direction is correct.
+#
+# Model 0  — No-EUN Baseline
+#   Dataset : ergm_dyad_year_eun (EUN rows excluded)
+#   Node set: nation-states only (n = n_nodes_noeun), 1995–2024
+#   Terms   : edges, mutual, GWIDegree(0.5), GWODegree(0.5),
+#             log trade, ATOP, PTA, trade HHI, export conc, import dep,
+#             complainant/respondent log-GDP/cap, log-pop, |GDP gap|,
+#             |pop gap|, log past cases (C & R), delrecip, memory(stability)
+#
+# Model 1  — Full Node Set (incl. EUN)
+#   Dataset : ergm_dyad_year_eun (all rows)
+#   Node set: nation-states + EUN (n = n_nodes), 1995–2024
+#   Terms   : same as Model 0
+#
+# Model 2  — + Political Alignment
+#   Dataset : ergm_dyad_year_eun (IP-complete: drops non-UN members)
+#   Node set: UN-member states + EUN (n = n_nodes_ip), 1995–2024
+#   Terms   : Model 1 + UN ideal point distance (idealpointfp)
+#
+# Model 3  — + Democracy
+#   Dataset : ergm_dyad_year_eun (IP+V-Dem-complete)
+#   Node set: countries with both idealpointfp & v2x_polyarchy (n = n_nodes_ip_dem), 1995–2024
+#   Terms   : Model 2 + complainant/respondent V-Dem polyarchy + complainant election year
+#
+# Model 1L — Lagged Trade (Robustness)
+#   Dataset : ergm_dyad_year_eun (full node set, 1996–2024; 1995 dropped)
+#   Node set: n = n_nodes, 1996–2024 (29 years)
+#   Terms   : Model 1 but trade replaced with trade(t-1)
+# ---------------------------------------------------------------------------
 
+# Diagnostic: print coefficient names from each model for verification
+cat("\n--- Coefficient names (for coef_map verification) ---\n")
+cat("model0:", paste(names(coef(model0)), collapse=", "), "\n")
+cat("model1:", paste(names(coef(model1)), collapse=", "), "\n")
+cat("model2:", paste(names(coef(model2)), collapse=", "), "\n")
+cat("model3:", paste(names(coef(model3)), collapse=", "), "\n")
+cat("model1L:", paste(names(coef(model1L)), collapse=", "), "\n")
+
+# ---------------------------------------------------------------------------
+# Unified coefficient map: maps btergm internal names -> informative labels.
+# Different models use different list-object names for the same covariate
+# (e.g., trade_cov_noeun vs trade_cov vs trade_cov_ip), so each variant is
+# explicitly mapped to the same display label. Run the diagnostic block above
+# and compare to names(coef(modelX)) if any rows appear misaligned.
+# ---------------------------------------------------------------------------
+coef_map <- list(
+  # --- Structural terms ---
+  "edges"                           = "Edges (Baseline)",
+  "mutual"                          = "Reciprocity",
+  "gwidegree.fixed.0.5"             = "GW In-degree (decay=0.5)",
+  "gwodegree.fixed.0.5"             = "GW Out-degree (decay=0.5)",
+
+  # --- Trade edge covariate (log): all model variants ---
+  "edgecov.trade_cov_noeun"         = "Log Bilateral Trade",      # M0
+  "edgecov.trade_cov"               = "Log Bilateral Trade",      # M1
+  "edgecov.trade_cov_ip"            = "Log Bilateral Trade",      # M2
+  "edgecov.trade_cov_ip_dem"        = "Log Bilateral Trade",      # M3
+  "edgecov.trade_cov_t1_lag"        = "Log Bilateral Trade (t$-$1)", # M1L
+
+  # --- Alliance ---
+  "edgecov.ally_cov_noeun"          = "ATOP Alliance",
+  "edgecov.ally_cov"                = "ATOP Alliance",
+  "edgecov.ally_cov_ip"             = "ATOP Alliance",
+  "edgecov.ally_cov_ip_dem"         = "ATOP Alliance",
+  "edgecov.ally_cov_lag"            = "ATOP Alliance",
+
+  # --- PTA ---
+  "edgecov.pta_cov_noeun"           = "PTA Exists",
+  "edgecov.pta_cov"                 = "PTA Exists",
+  "edgecov.pta_cov_ip"              = "PTA Exists",
+  "edgecov.pta_cov_ip_dem"          = "PTA Exists",
+  "edgecov.pta_cov_lag"             = "PTA Exists",
+
+  # --- Sector concentration ---
+  "edgecov.hhi_cov_noeun"           = "Trade Sector HHI",
+  "edgecov.hhi_cov"                 = "Trade Sector HHI",
+  "edgecov.hhi_cov_ip"              = "Trade Sector HHI",
+  "edgecov.hhi_cov_ip_dem"          = "Trade Sector HHI",
+  "edgecov.hhi_cov_lag"             = "Trade Sector HHI",
+
+  "edgecov.export_conc_cov_noeun"   = "Max Export Concentration (C$\\to$R)",
+  "edgecov.export_conc_cov"         = "Max Export Concentration (C$\\to$R)",
+  "edgecov.export_conc_cov_ip"      = "Max Export Concentration (C$\\to$R)",
+  "edgecov.export_conc_cov_ip_dem"  = "Max Export Concentration (C$\\to$R)",
+  "edgecov.export_conc_cov_lag"     = "Max Export Concentration (C$\\to$R)",
+
+  "edgecov.import_dep_cov_noeun"    = "Max Import Dependence (R$\\to$C)",
+  "edgecov.import_dep_cov"          = "Max Import Dependence (R$\\to$C)",
+  "edgecov.import_dep_cov_ip"       = "Max Import Dependence (R$\\to$C)",
+  "edgecov.import_dep_cov_ip_dem"   = "Max Import Dependence (R$\\to$C)",
+  "edgecov.import_dep_cov_lag"      = "Max Import Dependence (R$\\to$C)",
+
+  # --- Political alignment (Model 2+) ---
+  "edgecov.ideal_dist_cov_ip"       = "UN Voting Distance",
+  "edgecov.ideal_dist_cov_ip_dem"   = "UN Voting Distance",
+
+  # --- Node: complainant (out-degree / sender) ---
+  "nodeocov.log_gdppc"              = "Complainant GDP/capita (log)",
+  "nodeocov.log_pop"                = "Complainant Population (log)",
+  "nodeocov.log_cum_complainant"    = "Complainant Past Cases (log)",
+  "nodeocov.v2x_polyarchy"          = "Complainant Democracy (V-Dem)",
+  "nodeocov.election_binary"        = "Complainant Election Year",
+
+  # --- Node: respondent (in-degree / receiver) ---
+  "nodeicov.log_gdppc"              = "Respondent GDP/capita (log)",
+  "nodeicov.log_pop"                = "Respondent Population (log)",
+  "nodeicov.log_cum_respondent"     = "Respondent Past Cases (log)",
+  "nodeicov.v2x_polyarchy"          = "Respondent Democracy (V-Dem)",
+
+  # --- Dyadic gap ---
+  "absdiff.log_gdppc"               = "|GDP/capita Gap| (log)",
+  "absdiff.log_pop"                 = "|Population Gap| (log)",
+
+  # --- Temporal ---
+  "delrecip"                        = "Delayed Reciprocity",
+  "memory.stability"                = "Network Stability (memory)"
+)
+
+# Informative model names
+model_names_short <- c(
+  "M0: No-EUN",
+  "M1: Full",
+  "M2: +Alignment",
+  "M3: +Democracy",
+  "M1L: Lagged Trade"
+)
+model_names_long <- c(
+  "No-EUN Baseline",
+  "Full + Trade",
+  "+ UN Alignment",
+  "+ Democracy",
+  "Lagged Trade (t-1)"
+)
+
+# Screen output
 screenreg(
   list(model0, model1, model2, model3, model1L),
-  custom.model.names = c("M0: No-EUN", "M1: Full", "M2: +Align", "M3: +Demo", "M4: Lagged"),
-  digits = 3
+  custom.model.names = model_names_short,
+  custom.coef.map    = coef_map,
+  digits             = 3
 )
 
+# HTML output
 htmlreg(
   list(model0, model1, model2, model3, model1L),
-  file = "Data/Output/tergm_results.html",
-  custom.model.names = c("No-EUN Baseline", "Full + Trade", "+ Alignment", "+ Democracy", "Lagged"),
-  digits = 3,
-  caption = "TERGM Results: WTO Dispute Initiation (C->R), 1995-2024"
+  file               = "Data/Output/tergm_results.html",
+  custom.model.names = model_names_long,
+  custom.coef.map    = coef_map,
+  digits             = 3,
+  caption            = "TERGM Results: WTO Dispute Initiation (Complainant $\\to$ Respondent), 1995--2024",
+  caption.above      = TRUE
 )
-cat("Results saved to Data/Output/tergm_results.html\n")
+cat("HTML results saved to Data/Output/tergm_results.html\n")
+
+# LaTeX output — full table for paper
+texreg(
+  list(model0, model1, model2, model3, model1L),
+  file               = "Data/Output/tergm_results.tex",
+  custom.model.names = model_names_long,
+  custom.coef.map    = coef_map,
+  digits             = 3,
+  caption            = "TERGM Results: WTO Dispute Initiation (Complainant $\\to$ Respondent), 1995--2024",
+  caption.above      = TRUE,
+  label              = "tab:tergm_main",
+  fontsize           = "small",
+  use.packages       = FALSE,        # add \usepackage{booktabs} etc. in preamble
+  booktabs           = TRUE,
+  dcolumn            = FALSE,
+  sideways           = FALSE,
+  longtable          = FALSE,
+  custom.note       = paste0(
+    "\\textit{Notes:} Bootstrapped TERGM via \\texttt{btergm} (R = ", BTERGM_BOOTS, " replications). ",
+    "95\\% confidence intervals in brackets. ",
+    "DV: directed binary edge = 1 if complainant filed a WTO dispute against respondent in year $t$. ",
+    "``Complainant'' = exporter node (out-degree/sender); ``Respondent'' = importer node (in-degree/receiver). ",
+    "M0 excludes the EU as a unitary actor (EUN); M1--M1L include EUN. ",
+    "M2--M3 restrict to UN-member states where UN ideal point scores are available; M3 additionally requires V-Dem coverage. ",
+    "Trade variables: BACI HS92, log-transformed. ",
+    "Cumulative past cases log-transformed (log1p). ",
+    "M1L: year 1995 dropped (no t-1 trade data)."
+  )
+)
+cat("LaTeX results saved to Data/Output/tergm_results.tex\n")
+
+# LaTeX output — compact table for slides (core models only: M1, M2, M3)
+texreg(
+  list(model1, model2, model3),
+  file               = "Data/Output/tergm_results_slides.tex",
+  custom.model.names = c("Baseline", "+ UN Alignment", "+ Democracy"),
+  custom.coef.map    = coef_map,
+  digits             = 3,
+  caption            = "WTO Dispute Initiation (TERGM), 1995--2024",
+  caption.above      = TRUE,
+  label              = "tab:tergm_slides",
+  fontsize           = "footnotesize",
+  use.packages       = FALSE,
+  booktabs           = TRUE,
+  dcolumn            = FALSE,
+  custom.note       = paste0(
+    "\\textit{Notes:} Bootstrapped TERGM, R = ", BTERGM_BOOTS, " replications. ",
+    "95\\% CIs in brackets. DV = WTO dispute filing (Complainant $\\to$ Respondent). ",
+    "Cumulative past cases log-transformed."
+  )
+)
+cat("Slides LaTeX saved to Data/Output/tergm_results_slides.tex\n")
 
 # ===========================================================================
 # 8. GOODNESS-OF-FIT  (Model 2 — main specification)
