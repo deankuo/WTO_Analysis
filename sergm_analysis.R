@@ -12,11 +12,11 @@
 # Aggregation: negative (-1) wins over positive (+1) when both present.
 #
 # Models:
-#   Model S0 : SERGM-NoEUN — national-state baseline (no EUN)
-#   Model S1 : SERGM-Full  — structural balance + trade + node covariates
-#   Model S2 : SERGM-Full  — + political alignment (ideal point distance)
-#   Model S3 : SERGM-IpDem — + democracy (ip+dem-complete node set; drops nodes
-#              missing EITHER idealpointfp OR v2x_polyarchy)
+#   Model S0 : SERGM-NoEUN   — national-state baseline (no EUN)
+#   Model S1 : SERGM-Full    — structural balance + trade + node covariates (incl. EUN)
+#   Model S2 : SERGM-IP-UN   — IP-complete + UN voting distance, no ATOP (geopolitical channel isolated)
+#   Model S3 : SERGM-IP-Both — IP-complete + ATOP + UN voting distance (both channels combined)
+#   Model S4 : SERGM-IpDem   — IP+dem-complete + ally + UN IP + democracy (full model)
 #
 # ergm.sign API (Fritz et al. 2025, Political Analysis):
 #   Main functions : tsergm() [temporal], sergm() [static]
@@ -436,6 +436,7 @@ build_signed_nets <- function(edges_agg, panel, meta, nodes, severity_agg = NULL
   export_conc_cov_s <- list()
   import_dep_cov_s  <- list()
   severity_cov_s    <- list()
+  ally_sev_cov_s    <- list()   # interaction: ally_mat * sev_mat
   # Node-level covariates encoded as dyadic sum matrices M[i,j] = v[i] + v[j]
   # Kept for backward compatibility with saved RData; mple_sign uses nodecov() instead.
   gdp_cov_s         <- list()
@@ -495,6 +496,9 @@ build_signed_nets <- function(edges_agg, panel, meta, nodes, severity_agg = NULL
           sev_m[a, b] <- sev_m[b, a] <- sev_yr$severity[r]
       }
     }
+
+    # ---- Interaction: alliance x severity ----
+    ally_sev_m <- ally_m * sev_m
 
     # ---- Node attributes ----
     meta_yr <- meta %>% filter(year == yr) %>% distinct(iso3c, .keep_all = TRUE)
@@ -557,6 +561,7 @@ build_signed_nets <- function(edges_agg, panel, meta, nodes, severity_agg = NULL
     export_conc_cov_s[[yr_key]]  <- exp_conc_m
     import_dep_cov_s[[yr_key]]   <- imp_dep_m
     severity_cov_s[[yr_key]]     <- sev_m
+    ally_sev_cov_s[[yr_key]]     <- ally_sev_m
     gdp_cov_s[[yr_key]]          <- safe_sum_mat(gdp_vec)
     pop_cov_s[[yr_key]]          <- safe_sum_mat(pop_vec)
     activity_cov_s[[yr_key]]     <- safe_sum_mat(act_vec)
@@ -603,6 +608,7 @@ build_signed_nets <- function(edges_agg, panel, meta, nodes, severity_agg = NULL
        export_conc_cov_s = export_conc_cov_s,
        import_dep_cov_s  = import_dep_cov_s,
        severity_cov_s    = severity_cov_s,
+       ally_sev_cov_s    = ally_sev_cov_s,
        gdp_cov_s         = gdp_cov_s,
        pop_cov_s         = pop_cov_s,
        activity_cov_s    = activity_cov_s,
@@ -630,7 +636,7 @@ ip_s <- build_signed_nets(signed_agg_ip_s, ergm_panel_ip_s,
                           country_meta_ip_s, all_nodes_ip_s,
                           severity_agg_ip_s)
 
-cat("\n=== Building IP+DEM-COMPLETE signed network list (Model S3) ===\n")
+cat("\n=== Building IP+DEM-COMPLETE signed network list (Model S4) ===\n")
 ip_dem_s <- build_signed_nets(signed_agg_ip_dem_s, ergm_panel_ip_dem_s,
                               country_meta_ip_dem_s, all_nodes_ip_dem_s,
                               severity_agg_ip_dem_s)
@@ -646,6 +652,7 @@ hhi_cov_s          <- full_s$hhi_cov_s
 export_conc_cov_s  <- full_s$export_conc_cov_s
 import_dep_cov_s   <- full_s$import_dep_cov_s
 severity_cov_s     <- full_s$severity_cov_s
+ally_sev_cov_s     <- full_s$ally_sev_cov_s
 gdp_cov_s          <- full_s$gdp_cov_s
 pop_cov_s          <- full_s$pop_cov_s
 activity_cov_s     <- full_s$activity_cov_s
@@ -664,6 +671,7 @@ hhi_cov_s_noeun          <- noeun_s$hhi_cov_s
 export_conc_cov_s_noeun  <- noeun_s$export_conc_cov_s
 import_dep_cov_s_noeun   <- noeun_s$import_dep_cov_s
 severity_cov_s_noeun     <- noeun_s$severity_cov_s
+ally_sev_cov_s_noeun     <- noeun_s$ally_sev_cov_s
 gdp_cov_s_noeun          <- noeun_s$gdp_cov_s
 pop_cov_s_noeun          <- noeun_s$pop_cov_s
 activity_cov_s_noeun     <- noeun_s$activity_cov_s
@@ -681,6 +689,7 @@ hhi_cov_s_ip_s          <- ip_s$hhi_cov_s
 export_conc_cov_s_ip_s  <- ip_s$export_conc_cov_s
 import_dep_cov_s_ip_s   <- ip_s$import_dep_cov_s
 severity_cov_s_ip_s     <- ip_s$severity_cov_s
+ally_sev_cov_s_ip_s     <- ip_s$ally_sev_cov_s
 gdp_cov_s_ip_s          <- ip_s$gdp_cov_s
 pop_cov_s_ip_s          <- ip_s$pop_cov_s
 activity_cov_s_ip_s     <- ip_s$activity_cov_s
@@ -688,7 +697,7 @@ vdem_cov_s_ip_s         <- ip_s$vdem_cov_s
 gdp_diff_cov_s_ip_s     <- ip_s$gdp_diff_cov_s
 pop_diff_cov_s_ip_s     <- ip_s$pop_diff_cov_s
 
-# Unpack ip+dem-complete (Model S3)
+# Unpack ip+dem-complete (Model S4)
 signed_net_list_ip_dem_s     <- ip_dem_s$signed_net_list
 networks_combined_ip_dem_s   <- ip_dem_s$networks_combined
 trade_cov_s_ip_dem_s       <- ip_dem_s$trade_cov_s
@@ -699,6 +708,7 @@ hhi_cov_s_ip_dem_s         <- ip_dem_s$hhi_cov_s
 export_conc_cov_s_ip_dem_s <- ip_dem_s$export_conc_cov_s
 import_dep_cov_s_ip_dem_s  <- ip_dem_s$import_dep_cov_s
 severity_cov_s_ip_dem_s    <- ip_dem_s$severity_cov_s
+ally_sev_cov_s_ip_dem_s    <- ip_dem_s$ally_sev_cov_s
 gdp_cov_s_ip_dem_s         <- ip_dem_s$gdp_cov_s
 pop_cov_s_ip_dem_s         <- ip_dem_s$pop_cov_s
 activity_cov_s_ip_dem_s    <- ip_dem_s$activity_cov_s
@@ -729,29 +739,33 @@ for (yr in c("1995","2000","2005","2010","2015","2020","2024")) {
 avg_mat <- function(mat_list) Reduce("+", mat_list) / length(mat_list)
 
 # Full
-trade_avg            <- avg_mat(trade_cov_s);        ally_avg         <- avg_mat(ally_cov_s)
+trade_avg            <- avg_mat(trade_cov_s);         ally_avg         <- avg_mat(ally_cov_s)
 pta_avg              <- avg_mat(pta_cov_s);           hhi_avg          <- avg_mat(hhi_cov_s)
-export_conc_avg      <- avg_mat(export_conc_cov_s);  import_dep_avg   <- avg_mat(import_dep_cov_s)
-severity_avg         <- avg_mat(severity_cov_s);     gdp_diff_avg     <- avg_mat(gdp_diff_cov_s)
+export_conc_avg      <- avg_mat(export_conc_cov_s);   import_dep_avg   <- avg_mat(import_dep_cov_s)
+severity_avg         <- avg_mat(severity_cov_s);      ally_sev_avg     <- avg_mat(ally_sev_cov_s)
+gdp_diff_avg         <- avg_mat(gdp_diff_cov_s)
 pop_diff_avg         <- avg_mat(pop_diff_cov_s)
 # No-EUN
 trade_avg_noeun      <- avg_mat(trade_cov_s_noeun);      ally_avg_noeun      <- avg_mat(ally_cov_s_noeun)
 pta_avg_noeun        <- avg_mat(pta_cov_s_noeun);        hhi_avg_noeun       <- avg_mat(hhi_cov_s_noeun)
 export_conc_avg_noeun <- avg_mat(export_conc_cov_s_noeun); import_dep_avg_noeun <- avg_mat(import_dep_cov_s_noeun)
 
-severity_avg_noeun   <- avg_mat(severity_cov_s_noeun);   gdp_diff_avg_noeun  <- avg_mat(gdp_diff_cov_s_noeun)
+severity_avg_noeun   <- avg_mat(severity_cov_s_noeun);   ally_sev_avg_noeun  <- avg_mat(ally_sev_cov_s_noeun)
+gdp_diff_avg_noeun  <- avg_mat(gdp_diff_cov_s_noeun)
 pop_diff_avg_noeun   <- avg_mat(pop_diff_cov_s_noeun)
 # IP-complete (S2)
 trade_avg_ip_s       <- avg_mat(trade_cov_s_ip_s);       ally_avg_ip_s       <- avg_mat(ally_cov_s_ip_s)
 pta_avg_ip_s         <- avg_mat(pta_cov_s_ip_s);         hhi_avg_ip_s        <- avg_mat(hhi_cov_s_ip_s)
 export_conc_avg_ip_s <- avg_mat(export_conc_cov_s_ip_s); import_dep_avg_ip_s <- avg_mat(import_dep_cov_s_ip_s)
-severity_avg_ip_s    <- avg_mat(severity_cov_s_ip_s);    ideal_dist_avg_ip_s <- avg_mat(ideal_dist_cov_s_ip_s)
+severity_avg_ip_s    <- avg_mat(severity_cov_s_ip_s);    ally_sev_avg_ip_s   <- avg_mat(ally_sev_cov_s_ip_s)
+ideal_dist_avg_ip_s <- avg_mat(ideal_dist_cov_s_ip_s)
 gdp_diff_avg_ip_s    <- avg_mat(gdp_diff_cov_s_ip_s);   pop_diff_avg_ip_s   <- avg_mat(pop_diff_cov_s_ip_s)
 # IP+Dem-complete (S3)
 trade_avg_ip_dem_s       <- avg_mat(trade_cov_s_ip_dem_s);       ally_avg_ip_dem_s       <- avg_mat(ally_cov_s_ip_dem_s)
 pta_avg_ip_dem_s         <- avg_mat(pta_cov_s_ip_dem_s);         hhi_avg_ip_dem_s        <- avg_mat(hhi_cov_s_ip_dem_s)
 export_conc_avg_ip_dem_s <- avg_mat(export_conc_cov_s_ip_dem_s); import_dep_avg_ip_dem_s <- avg_mat(import_dep_cov_s_ip_dem_s)
-severity_avg_ip_dem_s    <- avg_mat(severity_cov_s_ip_dem_s);    ideal_dist_avg_ip_dem_s <- avg_mat(ideal_dist_cov_s_ip_dem_s)
+severity_avg_ip_dem_s    <- avg_mat(severity_cov_s_ip_dem_s);    ally_sev_avg_ip_dem_s   <- avg_mat(ally_sev_cov_s_ip_dem_s)
+ideal_dist_avg_ip_dem_s <- avg_mat(ideal_dist_cov_s_ip_dem_s)
 gdp_diff_avg_ip_dem_s    <- avg_mat(gdp_diff_cov_s_ip_dem_s);   pop_diff_avg_ip_dem_s   <- avg_mat(pop_diff_cov_s_ip_dem_s)
 
 cat("Time-averaged edge covariate matrices computed.\n")
@@ -804,9 +818,10 @@ if (ERGM_SIGN_AVAILABLE) {
       Neg(~ edgecov(trade_avg_noeun)) +
       Pos(~ edgecov(ally_avg_noeun)) +                # alliance -> C-TP alignment
       Neg(~ edgecov(ally_avg_noeun)) +                # alliance -> C-R dispute
-      Pos(~ edgecov(pta_avg_noeun)) +
-      Neg(~ edgecov(pta_avg_noeun)) +
-      Neg(~ edgecov(severity_avg_noeun)) +            # severity -> negative only
+      # Pos(~ edgecov(pta_avg_noeun)) +
+      # Neg(~ edgecov(pta_avg_noeun)) +
+      Neg(~ edgecov(severity_avg_noeun)) +           # severity -> negative only
+      Neg(~ edgecov(ally_sev_noeun)) 
       # Pos(~ nodecov("log_gdppc")) +
       # Neg(~ nodecov("log_gdppc")) +
       # Pos(~ nodecov("log_pop")) +
@@ -815,10 +830,10 @@ if (ERGM_SIGN_AVAILABLE) {
       # Neg(~ edgecov(gdp_diff_avg_noeun)) +
       # Pos(~ edgecov(pop_diff_avg_noeun)) +            # |log_pop_i - log_pop_j|
       # Neg(~ edgecov(pop_diff_avg_noeun)) +
-      Pos(~ nodecov("cum_complainant")) +                                                                                                               
-      Neg(~ nodecov("cum_complainant")) +                       
-      Pos(~ nodecov("cum_respondent")) +
-      Neg(~ nodecov("cum_respondent"))
+      # Pos(~ nodecov("cum_complainant")) +                                                                                                               
+      # Neg(~ nodecov("cum_complainant")) +                       
+      # Pos(~ nodecov("cum_respondent")) +
+      # Neg(~ nodecov("cum_respondent"))
       # control = control.ergm(MPLE.covariance.method = "naive")  # skip simulation
   )
   cat("\n--- Model S0 (No-EUN) ---\n"); print(summary(sergm_s0))
@@ -843,6 +858,7 @@ if (ERGM_SIGN_AVAILABLE) {
       Neg(~ edgecov(export_conc_avg)) +               # export dependence -> disputes
       Neg(~ edgecov(import_dep_avg)) +                # import leverage -> disputes
       Neg(~ edgecov(severity_avg)) +
+      Neg(~ edgecov(ally_sev_avg)) +                 # alliance x severity interaction
       Pos(~ nodecov("log_gdppc")) +
       Neg(~ nodecov("log_gdppc")) +
       Pos(~ nodecov("log_pop")) +
@@ -856,8 +872,8 @@ if (ERGM_SIGN_AVAILABLE) {
   )
   cat("\n--- Model S1 ---\n"); print(summary(sergm_s1))
 
-  # ---- Model S2: + Political alignment (ip-complete node set) ----
-  cat("\n=== Model S2: + Political Alignment (ip-complete, n =", n_nodes_ip_s, "nodes) ===\n")
+  # ---- Model S2: + UN Voting Alignment, no ally (geopolitical channel isolated) ----
+  cat("\n=== Model S2: + UN Alignment (ip-complete, n =", n_nodes_ip_s, "nodes) ===\n")
   sergm_s2 <- mple_sign(
     networks_combined_ip_s ~
       Pos(~ edges) +
@@ -868,15 +884,14 @@ if (ERGM_SIGN_AVAILABLE) {
       gwese(ALPHA, fixed = TRUE, base = "+") +
       Pos(~ edgecov(trade_avg_ip_s)) +
       Neg(~ edgecov(trade_avg_ip_s)) +
-      Pos(~ edgecov(ally_avg_ip_s)) +
-      Neg(~ edgecov(ally_avg_ip_s)) +
+      # No ATOP ally — isolating the UN voting channel
       Pos(~ edgecov(pta_avg_ip_s)) +
       Neg(~ edgecov(pta_avg_ip_s)) +
       Neg(~ edgecov(hhi_avg_ip_s)) +
       Neg(~ edgecov(export_conc_avg_ip_s)) +
       Neg(~ edgecov(import_dep_avg_ip_s)) +
       Neg(~ edgecov(severity_avg_ip_s)) +
-      Neg(~ edgecov(ideal_dist_avg_ip_s)) +           # political distance -> disputes
+      Neg(~ edgecov(ideal_dist_avg_ip_s)) +          # UN voting distance
       Pos(~ nodecov("log_gdppc")) +
       Neg(~ nodecov("log_gdppc")) +
       Pos(~ nodecov("log_pop")) +
@@ -890,9 +905,44 @@ if (ERGM_SIGN_AVAILABLE) {
   )
   cat("\n--- Model S2 ---\n"); print(summary(sergm_s2))
 
-  # ---- Model S3: + Democracy (ip+dem-complete node set) ----
-  cat("\n=== Model S3: + Democracy (ip+dem-complete, n =", n_nodes_ip_dem_s, "nodes) ===\n")
+  # ---- Model S3: + Alliance & UN Alignment (IP-complete; both political channels) ----
+  cat("\n=== Model S3: + Alliance & UN Alignment (ip-complete, n =", n_nodes_ip_s, "nodes) ===\n")
   sergm_s3 <- mple_sign(
+    networks_combined_ip_s ~
+      Pos(~ edges) +
+      Neg(~ edges) +
+      Pos(~ gwdegree(decay = ALPHA, fixed = TRUE)) +
+      Neg(~ gwdegree(decay = ALPHA, fixed = TRUE)) +
+      gwesf(ALPHA, fixed = TRUE, base = "+") +
+      gwese(ALPHA, fixed = TRUE, base = "+") +
+      Pos(~ edgecov(trade_avg_ip_s)) +
+      Neg(~ edgecov(trade_avg_ip_s)) +
+      Pos(~ edgecov(ally_avg_ip_s)) +                # ATOP alliance
+      Neg(~ edgecov(ally_avg_ip_s)) +
+      Pos(~ edgecov(pta_avg_ip_s)) +
+      Neg(~ edgecov(pta_avg_ip_s)) +
+      Neg(~ edgecov(hhi_avg_ip_s)) +
+      Neg(~ edgecov(export_conc_avg_ip_s)) +
+      Neg(~ edgecov(import_dep_avg_ip_s)) +
+      Neg(~ edgecov(severity_avg_ip_s)) +
+      Neg(~ edgecov(ally_sev_avg_ip_s)) +            # alliance x severity interaction
+      Neg(~ edgecov(ideal_dist_avg_ip_s)) +          # UN voting distance
+      Pos(~ nodecov("log_gdppc")) +
+      Neg(~ nodecov("log_gdppc")) +
+      Pos(~ nodecov("log_pop")) +
+      Neg(~ nodecov("log_pop")) +
+      Pos(~ edgecov(gdp_diff_avg_ip_s)) +
+      Neg(~ edgecov(gdp_diff_avg_ip_s)) +
+      Pos(~ edgecov(pop_diff_avg_ip_s)) +
+      Neg(~ edgecov(pop_diff_avg_ip_s)) +
+      Pos(~ nodecov("cum_activity")) +
+      Neg(~ nodecov("cum_activity"))
+  )
+  cat("\n--- Model S3 ---\n"); print(summary(sergm_s3))
+
+  # ---- Model S4: + Democracy (IP+dem-complete; ally + UN IP + democracy) ----
+  cat("\n=== Model S4: + Democracy (ip+dem-complete, n =", n_nodes_ip_dem_s, "nodes) ===\n")
+  sergm_s4 <- mple_sign(
     networks_combined_ip_dem_s ~
       Pos(~ edges) +
       Neg(~ edges) +
@@ -902,7 +952,7 @@ if (ERGM_SIGN_AVAILABLE) {
       gwese(ALPHA, fixed = TRUE, base = "+") +
       Pos(~ edgecov(trade_avg_ip_dem_s)) +
       Neg(~ edgecov(trade_avg_ip_dem_s)) +
-      Pos(~ edgecov(ally_avg_ip_dem_s)) +
+      Pos(~ edgecov(ally_avg_ip_dem_s)) +            # ATOP alliance back in full model
       Neg(~ edgecov(ally_avg_ip_dem_s)) +
       Pos(~ edgecov(pta_avg_ip_dem_s)) +
       Neg(~ edgecov(pta_avg_ip_dem_s)) +
@@ -910,7 +960,8 @@ if (ERGM_SIGN_AVAILABLE) {
       Neg(~ edgecov(export_conc_avg_ip_dem_s)) +
       Neg(~ edgecov(import_dep_avg_ip_dem_s)) +
       Neg(~ edgecov(severity_avg_ip_dem_s)) +
-      Neg(~ edgecov(ideal_dist_avg_ip_dem_s)) +
+      Neg(~ edgecov(ally_sev_avg_ip_dem_s)) +
+      Neg(~ edgecov(ideal_dist_avg_ip_dem_s)) +      # UN voting distance
       Pos(~ nodecov("log_gdppc")) +
       Neg(~ nodecov("log_gdppc")) +
       Pos(~ nodecov("log_pop")) +
@@ -921,21 +972,21 @@ if (ERGM_SIGN_AVAILABLE) {
       Neg(~ edgecov(pop_diff_avg_ip_dem_s)) +
       Pos(~ nodecov("cum_activity")) +
       Neg(~ nodecov("cum_activity")) +
-      Pos(~ nodecov("v2x_polyarchy")) +              # democracy (no NAs in ip_dem set)
+      Pos(~ nodecov("v2x_polyarchy")) +
       Neg(~ nodecov("v2x_polyarchy"))
   )
-  cat("\n--- Model S3 ---\n"); print(summary(sergm_s3))
+  cat("\n--- Model S4 ---\n"); print(summary(sergm_s4))
 
-  # GOF (Model S2 — main specification)
-  cat("\n=== Goodness-of-fit (Model S2) ===\n")
-  gof_s2 <- GoF(sergm_s2)
+  # GOF (Model S3 — UN alignment, main specification)
+  cat("\n=== Goodness-of-fit (Model S3) ===\n")
+  gof_s3 <- GoF(sergm_s3)
   pdf("Data/Output/sergm_gof.pdf", width = 10, height = 8)
-  plot(gof_s2)
+  plot(gof_s3)
   dev.off()
   cat("GOF plot saved to Data/Output/sergm_gof.pdf\n")
 
   # Save model objects
-  save(sergm_s0, sergm_s1, sergm_s2, sergm_s3,
+  save(sergm_s0, sergm_s1, sergm_s2, sergm_s3, sergm_s4,
        file = "Data/Output/sergm_models.RData")
   cat("Model objects saved to Data/Output/sergm_models.RData\n")
 
@@ -952,7 +1003,7 @@ save(
   # Full
   signed_net_list,
   trade_cov_s, ally_cov_s, pta_cov_s, ideal_dist_cov_s,
-  hhi_cov_s, export_conc_cov_s, import_dep_cov_s, severity_cov_s,
+  hhi_cov_s, export_conc_cov_s, import_dep_cov_s, severity_cov_s, ally_sev_cov_s,
   gdp_cov_s, pop_cov_s, gdp_diff_cov_s, pop_diff_cov_s,
   activity_cov_s, vdem_cov_s,
   all_nodes, n_nodes,
@@ -960,22 +1011,22 @@ save(
   signed_net_list_noeun,
   trade_cov_s_noeun, ally_cov_s_noeun, pta_cov_s_noeun, ideal_dist_cov_s_noeun,
   hhi_cov_s_noeun, export_conc_cov_s_noeun, import_dep_cov_s_noeun,
-  severity_cov_s_noeun, gdp_cov_s_noeun, pop_cov_s_noeun,
+  severity_cov_s_noeun, ally_sev_cov_s_noeun, gdp_cov_s_noeun, pop_cov_s_noeun,
   gdp_diff_cov_s_noeun, pop_diff_cov_s_noeun, activity_cov_s_noeun,
   all_nodes_noeun, n_nodes_noeun,
   # Ip-complete (Model S2)
   signed_net_list_ip_s,
   trade_cov_s_ip_s, ally_cov_s_ip_s, pta_cov_s_ip_s, ideal_dist_cov_s_ip_s,
   hhi_cov_s_ip_s, export_conc_cov_s_ip_s, import_dep_cov_s_ip_s,
-  severity_cov_s_ip_s, gdp_cov_s_ip_s, pop_cov_s_ip_s,
+  severity_cov_s_ip_s, ally_sev_cov_s_ip_s, gdp_cov_s_ip_s, pop_cov_s_ip_s,
   gdp_diff_cov_s_ip_s, pop_diff_cov_s_ip_s, activity_cov_s_ip_s,
   vdem_cov_s_ip_s,
   all_nodes_ip_s, n_nodes_ip_s, nodes_missing_ip_s,
-  # Ip+Dem-complete (Model S3)
+  # Ip+Dem-complete (Model S4)
   signed_net_list_ip_dem_s,
   trade_cov_s_ip_dem_s, ally_cov_s_ip_dem_s, pta_cov_s_ip_dem_s,
   ideal_dist_cov_s_ip_dem_s, hhi_cov_s_ip_dem_s, export_conc_cov_s_ip_dem_s,
-  import_dep_cov_s_ip_dem_s, severity_cov_s_ip_dem_s, gdp_cov_s_ip_dem_s,
+  import_dep_cov_s_ip_dem_s, severity_cov_s_ip_dem_s, ally_sev_cov_s_ip_dem_s, gdp_cov_s_ip_dem_s,
   pop_cov_s_ip_dem_s, gdp_diff_cov_s_ip_dem_s, pop_diff_cov_s_ip_dem_s,
   activity_cov_s_ip_dem_s, vdem_cov_s_ip_dem_s,
   all_nodes_ip_dem_s, n_nodes_ip_dem_s, nodes_missing_ip_dem_s,
@@ -984,3 +1035,278 @@ save(
   file = "Data/Output/sergm_prepared_data.RData"
 )
 cat("Signed network data saved to Data/Output/sergm_prepared_data.RData\n")
+
+# ===========================================================================
+# 9. OUTPUT TABLES
+# ===========================================================================
+# Applies the same standardize_coef_names approach used in tergm_analysis.R.
+# ergm.sign coefficient names encode the Pos/Neg wrapper and may include the
+# full matrix variable name (e.g. edgecov(trade_avg_noeun)); these are
+# normalised to canonical names before passing to texreg so that
+# model-specific matrix names collapse into a single row across models.
+#
+# If texreg::extract() does not have a method for mple_sign objects, the
+# tryCatch fallback builds a texreg S4 object via createTexreg() using
+# coef() and vcov() directly.
+# ---------------------------------------------------------------------------
+
+if (ERGM_SIGN_AVAILABLE &&
+    exists("sergm_s0") && exists("sergm_s1") &&
+    exists("sergm_s2") && exists("sergm_s3") && exists("sergm_s4")) {
+
+  suppressPackageStartupMessages(library(texreg))
+
+  # Diagnostic: print raw coefficient names BEFORE normalisation
+  cat("\n--- Raw coefficient names (pre-normalisation) ---\n")
+  cat("sergm_s0 :", paste(names(coef(sergm_s0)), collapse = ", "), "\n")
+  cat("sergm_s1 :", paste(names(coef(sergm_s1)), collapse = ", "), "\n")
+  cat("sergm_s2 :", paste(names(coef(sergm_s2)), collapse = ", "), "\n")
+  cat("sergm_s3 :", paste(names(coef(sergm_s3)), collapse = ", "), "\n")
+  cat("sergm_s4 :", paste(names(coef(sergm_s4)), collapse = ", "), "\n")
+
+  # --------------------------------------------------------------------------
+  # standardize_coef_names_s: normalise model-specific covariate names to
+  # canonical names.  grepl(fixed=TRUE) is used throughout so the function
+  # works regardless of how ergm.sign formats the Pos/Neg separator
+  # (dot, colon, parenthesis) or what suffix it appends to edgecov names.
+  # --------------------------------------------------------------------------
+  standardize_coef_names_s <- function(model_obj) {
+    tr <- tryCatch(
+      texreg::extract(model_obj),
+      error = function(e) {
+        coefs <- coef(model_obj)
+        ses   <- tryCatch(sqrt(diag(vcov(model_obj))),
+                          error = function(e2) rep(NA_real_, length(coefs)))
+        texreg::createTexreg(
+          coef.names = names(coefs),
+          coef       = unname(coefs),
+          se         = unname(ses),
+          pvalues    = rep(NA_real_, length(coefs))
+        )
+      }
+    )
+    cn <- tr@coef.names
+
+    is_pos <- function(x) grepl("Pos", x, fixed = TRUE)
+    is_neg <- function(x) grepl("Neg", x, fixed = TRUE)
+
+    # ----- Structural: edges (exclude edgecov matches) -----
+    cn[grepl("edges", cn, fixed = TRUE) & !grepl("edgecov", cn, fixed = TRUE) & is_pos(cn)] <- "Pos.edges"
+    cn[grepl("edges", cn, fixed = TRUE) & !grepl("edgecov", cn, fixed = TRUE) & is_neg(cn)] <- "Neg.edges"
+
+    # ----- Structural: GW degree (undirected) -----
+    cn[grepl("gwdeg", cn, fixed = TRUE) & is_pos(cn)] <- "Pos.gwdeg.fixed.0.5"
+    cn[grepl("gwdeg", cn, fixed = TRUE) & is_neg(cn)] <- "Neg.gwdeg.fixed.0.5"
+
+    # ----- Balance terms (no Pos/Neg wrapper) -----
+    cn[grepl("gwesf", cn, fixed = TRUE)] <- "gwesf.fixed.0.5"
+    cn[grepl("gwese", cn, fixed = TRUE)] <- "gwese.fixed.0.5"
+
+    # ----- Edge covariates: trade (lagged before contemporaneous) -----
+    cn[grepl("trade_avg", cn, fixed = TRUE) & is_pos(cn)] <- "Pos.edgecov.trade"
+    cn[grepl("trade_avg", cn, fixed = TRUE) & is_neg(cn)] <- "Neg.edgecov.trade"
+
+    # ----- Edge covariates: political / institutional -----
+    cn[grepl("ally_avg",        cn, fixed = TRUE) & is_pos(cn)] <- "Pos.edgecov.ally"
+    cn[grepl("ally_avg",        cn, fixed = TRUE) & is_neg(cn)] <- "Neg.edgecov.ally"
+    cn[grepl("pta_avg",         cn, fixed = TRUE) & is_pos(cn)] <- "Pos.edgecov.pta"
+    cn[grepl("pta_avg",         cn, fixed = TRUE) & is_neg(cn)] <- "Neg.edgecov.pta"
+
+    # ----- Edge covariates: sector trade structure (negative-only terms) -----
+    cn[grepl("hhi_avg",         cn, fixed = TRUE)] <- "Neg.edgecov.hhi"
+    cn[grepl("export_conc_avg", cn, fixed = TRUE)] <- "Neg.edgecov.export_conc"
+    cn[grepl("import_dep_avg",  cn, fixed = TRUE)] <- "Neg.edgecov.import_dep"
+
+    # ----- Edge covariates: geopolitical / severity (negative-only) -----
+    cn[grepl("ideal_dist_avg",  cn, fixed = TRUE)] <- "Neg.edgecov.ideal_dist"
+    cn[grepl("severity_avg",    cn, fixed = TRUE)] <- "Neg.edgecov.severity"
+    cn[grepl("ally_sev_avg",    cn, fixed = TRUE)] <- "Neg.edgecov.ally_sev"
+
+    # ----- Edge covariates: dyadic gaps (Pos/Neg split) -----
+    cn[grepl("gdp_diff_avg",    cn, fixed = TRUE) & is_pos(cn)] <- "Pos.edgecov.gdp_diff"
+    cn[grepl("gdp_diff_avg",    cn, fixed = TRUE) & is_neg(cn)] <- "Neg.edgecov.gdp_diff"
+    cn[grepl("pop_diff_avg",    cn, fixed = TRUE) & is_pos(cn)] <- "Pos.edgecov.pop_diff"
+    cn[grepl("pop_diff_avg",    cn, fixed = TRUE) & is_neg(cn)] <- "Neg.edgecov.pop_diff"
+
+    # ----- Node covariates (Pos/Neg split) -----
+    cn[grepl("log_gdppc",       cn, fixed = TRUE) & is_pos(cn)] <- "Pos.nodecov.log_gdppc"
+    cn[grepl("log_gdppc",       cn, fixed = TRUE) & is_neg(cn)] <- "Neg.nodecov.log_gdppc"
+    cn[grepl("log_pop",         cn, fixed = TRUE) & is_pos(cn)] <- "Pos.nodecov.log_pop"
+    cn[grepl("log_pop",         cn, fixed = TRUE) & is_neg(cn)] <- "Neg.nodecov.log_pop"
+    # cum_activity (S1-S3) vs cum_complainant / cum_respondent (S0)
+    cn[grepl("cum_activity",    cn, fixed = TRUE) & is_pos(cn)] <- "Pos.nodecov.cum_activity"
+    cn[grepl("cum_activity",    cn, fixed = TRUE) & is_neg(cn)] <- "Neg.nodecov.cum_activity"
+    cn[grepl("cum_complainant", cn, fixed = TRUE) & is_pos(cn)] <- "Pos.nodecov.cum_complainant"
+    cn[grepl("cum_complainant", cn, fixed = TRUE) & is_neg(cn)] <- "Neg.nodecov.cum_complainant"
+    cn[grepl("cum_respondent",  cn, fixed = TRUE) & is_pos(cn)] <- "Pos.nodecov.cum_respondent"
+    cn[grepl("cum_respondent",  cn, fixed = TRUE) & is_neg(cn)] <- "Neg.nodecov.cum_respondent"
+    cn[grepl("v2x_polyarchy",   cn, fixed = TRUE) & is_pos(cn)] <- "Pos.nodecov.v2x_polyarchy"
+    cn[grepl("v2x_polyarchy",   cn, fixed = TRUE) & is_neg(cn)] <- "Neg.nodecov.v2x_polyarchy"
+
+    tr@coef.names <- cn
+    tr
+  }
+
+  # --------------------------------------------------------------------------
+  # Canonical coef map — one display row per canonical name.
+  # "+" suffix = effect on positive (cooperation) edges.
+  # "$-$" suffix = effect on negative (dispute) edges.
+  # gwesf / gwese are balance terms (no Pos/Neg split).
+  # --------------------------------------------------------------------------
+  coef_map_s <- list(
+    # --- Structural ---
+    "Pos.edges"                   = "Edges: Positive",
+    "Neg.edges"                   = "Edges: Negative",
+    "Pos.gwdeg.fixed.0.5"         = "GW Degree ($+$, decay=0.5)",
+    "Neg.gwdeg.fixed.0.5"         = "GW Degree ($-$, decay=0.5)",
+    "gwesf.fixed.0.5"             = "GW Shared Friends (balance)",
+    "gwese.fixed.0.5"             = "GW Shared Enemies (balance)",
+    # --- Trade ---
+    "Pos.edgecov.trade"           = "Log Bilateral Trade: $+$",
+    "Neg.edgecov.trade"           = "Log Bilateral Trade: $-$",
+    # --- Dyadic political / institutional ---
+    "Pos.edgecov.ally"            = "ATOP Alliance: $+$",
+    "Neg.edgecov.ally"            = "ATOP Alliance: $-$",
+    "Pos.edgecov.pta"             = "PTA Exists: $+$",
+    "Neg.edgecov.pta"             = "PTA Exists: $-$",
+    # --- Sector trade structure (negative-edge terms) ---
+    "Neg.edgecov.hhi"             = "Trade Sector HHI: $-$",
+    "Neg.edgecov.export_conc"     = "Max Export Conc.: $-$",
+    "Neg.edgecov.import_dep"      = "Max Import Dep.: $-$",
+    # --- Geopolitical alignment (negative-edge term) ---
+    "Neg.edgecov.ideal_dist"      = "UN Voting Distance: $-$",
+    # --- Severity (negative-edge term) ---
+    "Neg.edgecov.severity"        = "Dispute Severity: $-$",
+    "Neg.edgecov.ally_sev"        = "Alliance $\\times$ Severity: $-$",
+    # --- Node covariates ---
+    "Pos.nodecov.log_gdppc"       = "Log GDP/capita: $+$",
+    "Neg.nodecov.log_gdppc"       = "Log GDP/capita: $-$",
+    "Pos.nodecov.log_pop"         = "Log Population: $+$",
+    "Neg.nodecov.log_pop"         = "Log Population: $-$",
+    # cum_activity (S1-S3); cum_complainant / cum_respondent (S0)
+    "Pos.nodecov.cum_activity"    = "WTO Activity (cum.): $+$",
+    "Neg.nodecov.cum_activity"    = "WTO Activity (cum.): $-$",
+    "Pos.nodecov.cum_complainant" = "Cum. Complainant: $+$",
+    "Neg.nodecov.cum_complainant" = "Cum. Complainant: $-$",
+    "Pos.nodecov.cum_respondent"  = "Cum. Respondent: $+$",
+    "Neg.nodecov.cum_respondent"  = "Cum. Respondent: $-$",
+    "Pos.nodecov.v2x_polyarchy"   = "Democracy (V-Dem): $+$",
+    "Neg.nodecov.v2x_polyarchy"   = "Democracy (V-Dem): $-$",
+    # --- Dyadic gaps ---
+    "Pos.edgecov.gdp_diff"        = "|GDP/capita Gap|: $+$",
+    "Neg.edgecov.gdp_diff"        = "|GDP/capita Gap|: $-$",
+    "Pos.edgecov.pop_diff"        = "|Population Gap|: $+$",
+    "Neg.edgecov.pop_diff"        = "|Population Gap|: $-$"
+  )
+
+  # Informative model names
+  model_names_s_short  <- c("S0: No-EUN", "S1: Baseline", "S2: +UN Align", "S3: +Ally+UN", "S4: +Democracy")
+  model_names_s_long   <- c("No-EUN Baseline", "Baseline (EUN)", "+ UN Alignment", "+ Alliance \\& UN", "+ Democracy")
+  model_names_s_slides <- c("Baseline", "+ UN Alignment", "+ Democracy")
+
+  # Pre-extract and normalise coefficient names for all output formats
+  tr_list_s_full   <- lapply(list(sergm_s0, sergm_s1, sergm_s2, sergm_s3, sergm_s4),
+                             standardize_coef_names_s)
+  tr_list_s_paper  <- tr_list_s_full          # S0-S4 in main paper table
+  tr_list_s_slides <- lapply(list(sergm_s1, sergm_s3, sergm_s4),
+                             standardize_coef_names_s)   # S1, S3, S4 for slides
+
+  # --- Diagnostic: verify normalisation and coef_map_s coverage ---
+  cat("\n--- Normalised coef names per SERGM model ---\n")
+  model_labels_s <- c("S0", "S1", "S2", "S3", "S4")
+  for (i in seq_along(tr_list_s_full)) {
+    cat(model_labels_s[i], ":", paste(tr_list_s_full[[i]]@coef.names, collapse = ", "), "\n")
+  }
+  all_norm_s         <- unique(unlist(lapply(tr_list_s_full, function(tr) tr@coef.names)))
+  missing_from_map_s <- setdiff(all_norm_s, names(coef_map_s))
+  missing_in_models_s <- setdiff(names(coef_map_s), all_norm_s)
+  if (length(missing_from_map_s) > 0)
+    cat("\nWARN — coefficients in SERGM models but NOT in coef_map_s:\n ",
+        paste(missing_from_map_s, collapse = "\n  "), "\n")
+  if (length(missing_in_models_s) > 0)
+    cat("\nWARN — coef_map_s keys not found in any SERGM model (will appear blank):\n ",
+        paste(missing_in_models_s, collapse = "\n  "), "\n")
+  if (length(missing_from_map_s) == 0 && length(missing_in_models_s) == 0)
+    cat("\nAll SERGM coef names matched — table will be complete.\n")
+  # -------------------------------------------------------------------------
+
+  # Screen output (all models)
+  screenreg(
+    tr_list_s_full,
+    custom.model.names = model_names_s_short,
+    custom.coef.map    = coef_map_s,
+    digits             = 3
+  )
+
+  # HTML output (all models)
+  htmlreg(
+    tr_list_s_full,
+    file               = "Data/Output/sergm_results.html",
+    custom.model.names = model_names_s_long,
+    custom.coef.map    = coef_map_s,
+    digits             = 3,
+    caption            = "SERGM Results: WTO Signed Network Analysis, 1995--2024",
+    caption.above      = TRUE
+  )
+  cat("HTML results saved to Data/Output/sergm_results.html\n")
+
+  sergm_note <- paste0(
+    "\\textit{Notes:} Pooled MPLE-SERGM via \\texttt{ergm.sign} (Fritz et al.\\ 2025). ",
+    "Coefficient sign ($+$/$-$) denotes effect on positive (cooperation) vs.\\ ",
+    "negative (dispute) edges. ",
+    "Balance terms test structural balance: gwesf = friends-of-friends-are-friends; ",
+    "gwese = enemies-of-enemies-are-friends. ",
+    "S0 excludes EUN; S1--S3 include EUN as a unitary EU actor. ",
+    "S2: IP-complete sample (non-UN members dropped). ",
+    "S3: IP+V-Dem-complete sample. ",
+    "Trade: BACI HS92, log-transformed. Cumulative past cases: log1p. ",
+    "Severity: 1--5 scale (0 for non-dispute dyads)."
+  )
+
+  # LaTeX — main paper table (S0-S3)
+  texreg(
+    tr_list_s_paper,
+    file               = "Data/Output/sergm_results.tex",
+    custom.model.names = model_names_s_long,
+    custom.coef.map    = coef_map_s,
+    digits             = 3,
+    caption            = "SERGM Results: WTO Signed Network Analysis, 1995--2024",
+    caption.above      = TRUE,
+    label              = "tab:sergm_main",
+    fontsize           = "small",
+    use.packages       = FALSE,
+    booktabs           = TRUE,
+    dcolumn            = FALSE,
+    sideways           = TRUE,
+    longtable          = FALSE,
+    custom.note        = sergm_note
+  )
+  cat("LaTeX (paper) saved to Data/Output/sergm_results.tex\n")
+
+  # LaTeX — slides table (S1, S2, S3)
+  texreg(
+    tr_list_s_slides,
+    file               = "Data/Output/sergm_results_slides.tex",
+    custom.model.names = model_names_s_slides,
+    custom.coef.map    = coef_map_s,
+    digits             = 3,
+    caption            = "WTO Signed Network (SERGM), 1995--2024",
+    caption.above      = TRUE,
+    label              = "tab:sergm_slides",
+    fontsize           = "footnotesize",
+    use.packages       = FALSE,
+    booktabs           = TRUE,
+    dcolumn            = FALSE,
+    sideways           = FALSE,
+    longtable          = FALSE,
+    custom.note        = paste0(
+      "\\textit{Notes:} Pooled MPLE-SERGM. Positive edge = cooperation (C--TP alignment); ",
+      "Negative edge = dispute (C$\\to$R or TP$\\to$R). ",
+      "S1: EUN baseline; S2: $+$ UN voting distance; S3: $+$ V-Dem democracy."
+    )
+  )
+  cat("LaTeX (slides) saved to Data/Output/sergm_results_slides.tex\n")
+
+} else {
+  cat("\nSERGM output tables skipped: models not estimated (ergm.sign unavailable or estimation failed).\n")
+}
