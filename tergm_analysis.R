@@ -909,19 +909,19 @@ model_names_short <- c(
   "M4: +Democracy"
 )
 model_names_long <- c(
-  "No-EUN Baseline",
-  "Baseline (EUN)",
-  "+ UN Alignment",
-  "+ Alliance \\& UN",
-  "+ Democracy"
+  "(1) No-EUN",
+  "(2) Baseline",
+  "(3) +UN Align",
+  "(4) +Ally+UN",
+  "(5) +Democracy"
 )
 
 # Slides: M1, M2, M3, M4 — progressive channel addition
 model_names_slides <- c(
-  "Baseline",
-  "+ UN Alignment",
-  "+ Alliance \\& UN",
-  "+ Democracy"
+  "(1) Baseline",
+  "(2) +UN Align",
+  "(3) +Ally+UN",
+  "(4) +Democracy"
 )
 
 # Pre-extract and normalise coefficient names for all output formats
@@ -1059,7 +1059,7 @@ cat("Slides LaTeX saved to Data/Output/tergm_results_slides.tex\n")
 #   geodesic   : triggers Matrix[<-] sparse-matrix error in recent Matrix versions;
 #                large directed networks make this computationally infeasible anyway
 cat("\n=== Goodness-of-fit (Model 2 — UN alignment) ===\n")
-g <- btergm::gof(model2, statistics = c(triad.directed, esp, fastgreedy.modularity,
+g <- btergm::gof(model2, statistics = c(triad.directed, fastgreedy.modularity,
                              rocpr), nsim = 100)
 g
 plot(g)

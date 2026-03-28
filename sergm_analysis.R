@@ -821,7 +821,7 @@ if (ERGM_SIGN_AVAILABLE) {
       # Pos(~ edgecov(pta_avg_noeun)) +
       # Neg(~ edgecov(pta_avg_noeun)) +
       Neg(~ edgecov(severity_avg_noeun)) +           # severity -> negative only
-      Neg(~ edgecov(ally_sev_noeun)) 
+      Neg(~ edgecov(ally_sev_avg_noeun))
       # Pos(~ nodecov("log_gdppc")) +
       # Neg(~ nodecov("log_gdppc")) +
       # Pos(~ nodecov("log_pop")) +
@@ -1201,15 +1201,15 @@ if (ERGM_SIGN_AVAILABLE &&
 
   # Informative model names
   model_names_s_short  <- c("S0: No-EUN", "S1: Baseline", "S2: +UN Align", "S3: +Ally+UN", "S4: +Democracy")
-  model_names_s_long   <- c("No-EUN Baseline", "Baseline (EUN)", "+ UN Alignment", "+ Alliance \\& UN", "+ Democracy")
-  model_names_s_slides <- c("Baseline", "+ UN Alignment", "+ Democracy")
+  model_names_s_long   <- c("(1) No-EUN", "(2) Baseline", "(3) +UN Align", "(4) +Ally+UN", "(5) +Democracy")
+  model_names_s_slides <- c("(1) Baseline", "(2) +UN Align", "(3) +Democracy")
 
   # Pre-extract and normalise coefficient names for all output formats
   tr_list_s_full   <- lapply(list(sergm_s0, sergm_s1, sergm_s2, sergm_s3, sergm_s4),
                              standardize_coef_names_s)
   tr_list_s_paper  <- tr_list_s_full          # S0-S4 in main paper table
-  tr_list_s_slides <- lapply(list(sergm_s1, sergm_s3, sergm_s4),
-                             standardize_coef_names_s)   # S1, S3, S4 for slides
+  tr_list_s_slides <- lapply(list(sergm_s1, sergm_s2, sergm_s4),
+                             standardize_coef_names_s)   # S1, S2, S4 for slides
 
   # --- Diagnostic: verify normalisation and coef_map_s coverage ---
   cat("\n--- Normalised coef names per SERGM model ---\n")
