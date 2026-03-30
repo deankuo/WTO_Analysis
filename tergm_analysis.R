@@ -37,12 +37,14 @@
 # ===========================================================================
 
 # install.packages(c("btergm", "network", "sna", "texreg", "dplyr", "tidyr"))
-library(network)
-library(sna)      # load before btergm so btergm::gof wins the namespace
-library(btergm)
-library(texreg)
-library(dplyr)
-library(tidyr)
+suppressPackageStartupMessages({
+    library(network)
+    library(sna)      # load before btergm so btergm::gof wins the namespace
+    library(btergm)
+    library(texreg)
+    library(dplyr)
+    library(tidyr)
+})
 
 # ===========================================================================
 # 1. READ DATA
@@ -170,7 +172,7 @@ cat("total_trade NA  :", sum(is.na(ergm_panel$total_trade_ij)), "\n")
 # ===========================================================================
 
 YEAR_START <- 1995
-YEAR_END   <- 2024
+YEAR_END   <- 2018
 
 EXCLUDED_COUNTRIES <- c("MAC", "HKG", "SOM", "PRK")
 
@@ -566,7 +568,7 @@ end_time <- Sys.time()
 execution_time <- end_time - start_time
 print(execution_time)
 cat("\n--- Model 0 (No-EUN) ---\n"); summary(model0)
-saveRDS(model0, "Data/Output/model0.rds")
+saveRDS(model0, "Data/Output/model0_robust.rds")
 gc()
 
 # --- Model 1: Full node set + structural + trade ---
@@ -604,7 +606,7 @@ end_time <- Sys.time()
 execution_time <- end_time - start_time
 print(execution_time)
 cat("\n--- Model 1 ---\n"); summary(model1)
-saveRDS(model1, "Data/Output/model1.rds")
+saveRDS(model1, "Data/Output/model1_robust.rds")
 gc()
 
 # --- Model 2: + UN Voting Alignment (IP-complete; novel geopolitical channel) ---
@@ -643,7 +645,7 @@ end_time <- Sys.time()
 execution_time <- end_time - start_time
 print(execution_time)
 cat("\n--- Model 2 ---\n"); summary(model2)
-saveRDS(model2, "Data/Output/model2.rds")
+saveRDS(model2, "Data/Output/model2_robust.rds")
 gc()
 
 # --- Model 3: + Alliance & UN Alignment (IP-complete; both political channels) ---
@@ -682,7 +684,7 @@ end_time <- Sys.time()
 execution_time <- end_time - start_time
 print(execution_time)
 cat("\n--- Model 3 ---\n"); summary(model3)
-saveRDS(model3, "Data/Output/model3.rds")
+saveRDS(model3, "Data/Output/model3_robust.rds")
 gc()
 
 # --- Model 4: + Democracy (IP+dem-complete; ally + UN IP + democracy) ---
@@ -724,7 +726,7 @@ end_time <- Sys.time()
 execution_time <- end_time - start_time
 print(execution_time)
 cat("\n--- Model 4 ---\n"); summary(model4)
-saveRDS(model4, "Data/Output/model4.rds")
+saveRDS(model4, "Data/Output/model4_robust.rds")
 gc()
 
 # ===========================================================================
@@ -866,34 +868,34 @@ coef_map <- list(
   # --- Structural ---
   "edges"                         = "Edges (Baseline)",
   "mutual"                        = "Reciprocity",
-  "gwideg.fixed.0.5"              = "GW In-degree (decay=0.5)",
-  "gwodeg.fixed.0.5"              = "GW Out-degree (decay=0.5)",
+  "gwideg.fixed.0.5"              = "GW In-degree",
+  "gwodeg.fixed.0.5"              = "GW Out-degree",
   # --- Trade ---
-  "edgecov.trade"                 = "Log Bilateral Trade",
-  "edgecov.trade_t1"              = "Log Bilateral Trade (t$-$1)",
+  "edgecov.trade"                 = "Bilateral Trade",
+  "edgecov.trade_t1"              = "Bilateral Trade (t$-$1)",
   # --- Dyadic political / institutional ---
   "edgecov.ally"                  = "ATOP Alliance",
   "edgecov.pta"                   = "PTA Exists",
   # --- Sector trade structure ---
   "edgecov.hhi"                   = "Trade Sector HHI",
-  "edgecov.export_conc"           = "Max Export Concentration (C$\\to$R)",
-  "edgecov.import_dep"            = "Max Import Dependence (R$\\to$C)",
+  "edgecov.export_conc"           = "Max Export Concentration",
+  "edgecov.import_dep"            = "Max Import Dependence",
   # --- Geopolitical alignment ---
   "edgecov.ideal_dist"            = "UN Voting Distance",
   # --- Node: complainant (sender / out-degree) ---
-  "nodeocov.log_gdppc"            = "Complainant GDP/capita (log)",
-  "nodeocov.log_pop"              = "Complainant Population (log)",
-  "nodeocov.log_cum_complainant"  = "Complainant Past Cases (log)",
+  "nodeocov.log_gdppc"            = "Complainant GDP/capita",
+  "nodeocov.log_pop"              = "Complainant Population",
+  "nodeocov.log_cum_complainant"  = "Complainant Past Cases",
   "nodeocov.v2x_polyarchy"        = "Complainant Democracy (V-Dem)",
   "nodeocov.election_binary"      = "Complainant Election Year",
   # --- Node: respondent (receiver / in-degree) ---
-  "nodeicov.log_gdppc"            = "Respondent GDP/capita (log)",
-  "nodeicov.log_pop"              = "Respondent Population (log)",
-  "nodeicov.log_cum_respondent"   = "Respondent Past Cases (log)",
+  "nodeicov.log_gdppc"            = "Respondent GDP/capita",
+  "nodeicov.log_pop"              = "Respondent Population",
+  "nodeicov.log_cum_respondent"   = "Respondent Past Cases",
   "nodeicov.v2x_polyarchy"        = "Respondent Democracy (V-Dem)",
   # --- Dyadic gap ---
-  "absdiff.log_gdppc"             = "|GDP/capita Gap| (log)",
-  "absdiff.log_pop"               = "|Population Gap| (log)",
+  "absdiff.log_gdppc"             = "GDP/capita Gap",
+  "absdiff.log_pop"               = "Population Gap",
   # --- Temporal ---
   "delrecip"                      = "Delayed Reciprocity",
   "memory.stability"              = "Network Stability (memory)"
@@ -909,19 +911,19 @@ model_names_short <- c(
   "M4: +Democracy"
 )
 model_names_long <- c(
-  "(1) No-EUN",
-  "(2) Baseline",
-  "(3) +UN Align",
-  "(4) +Ally+UN",
-  "(5) +Democracy"
+  "No-EUN",
+  "Baseline",
+  "+UN Align",
+  "+Ally+UN",
+  "+Democracy"
 )
 
 # Slides: M1, M2, M3, M4 — progressive channel addition
 model_names_slides <- c(
-  "(1) Baseline",
-  "(2) +UN Align",
-  "(3) +Ally+UN",
-  "(4) +Democracy"
+  "Baseline",
+  "+UN Align",
+  "+Ally+UN",
+  "+Democracy"
 )
 
 # Pre-extract and normalise coefficient names for all output formats
@@ -949,18 +951,112 @@ if (length(missing_from_map) == 0 && length(missing_in_models) == 0)
   cat("\nAll coef names matched — table will be complete.\n")
 # -------------------------------------------------------------------------
 
-# Post-process a texreg-generated .tex to reduce line spacing and column padding
-compress_tex <- function(filepath, arraystretch = 0.82, tabcolsep = "3pt") {
+# Convert a texreg-generated .tex to xltabular format matching result_example.tex.
+# Replaces floating table/sidewaystable with a non-floating xltabular that
+# supports page breaks and places the note below the closing brace.
+# Two-row header: numbers row (repeated on continuation pages) + model names row.
+# Significance footnote always added inside \endlastfoot.
+post_process_tex <- function(filepath, arraystretch = 0.9, tabcolsep = "2pt") {
   lines <- readLines(filepath)
-  tab_idx <- grep("\\\\begin\\{tabular", lines)[1]
-  if (!is.na(tab_idx)) {
-    insert <- c(
-      sprintf("\\renewcommand{\\arraystretch}{%.2f}", arraystretch),
-      sprintf("\\setlength{\\tabcolsep}{%s}", tabcolsep)
-    )
-    lines <- c(lines[seq_len(tab_idx - 1)], insert, lines[tab_idx:length(lines)])
-    writeLines(lines, filepath)
+
+  # ---- 1. Extract caption ----
+  cap_idx      <- grep("^\\\\caption\\{", lines)
+  caption_text <- if (length(cap_idx) > 0)
+    sub("^\\\\caption\\{(.+)\\}\\s*$", "\\1", lines[cap_idx[1]])
+  else ""
+
+  # ---- 2. Extract label ----
+  lab_idx    <- grep("^\\\\label\\{", lines)
+  label_text <- if (length(lab_idx) > 0)
+    sub("^\\\\label\\{([^}]+)\\}\\s*$", "\\1", lines[lab_idx[1]])
+  else ""
+
+  # ---- 3. Column count from \begin{tabular}{spec} ----
+  tab_idx <- grep("^\\\\begin\\{tabular", lines)
+  n_cols  <- 2L
+  if (length(tab_idx) > 0) {
+    braces <- regmatches(lines[tab_idx[1]], gregexpr("\\{[^}]+\\}", lines[tab_idx[1]]))[[1]]
+    if (length(braces) > 0) {
+      spec   <- gsub("[{}]", "", braces[length(braces)])
+      tokens <- strsplit(trimws(spec), "\\s+")[[1]]
+      tokens <- tokens[nchar(tokens) > 0 & !grepl("^@", tokens)]
+      n_cols <- length(tokens)
+    }
   }
+  n_dat <- max(1L, n_cols - 1L)
+
+  # ---- 4. Header rows (between \toprule and first \midrule) ----
+  toprule_idx   <- grep("^\\\\toprule",    lines)[1]
+  all_midrule   <- grep("^\\\\midrule",    lines)
+  first_midrule <- all_midrule[1]
+  header_rows   <- if (!is.na(toprule_idx) && !is.na(first_midrule) &&
+                       first_midrule > toprule_idx + 1L)
+    lines[(toprule_idx + 1L):(first_midrule - 1L)]
+  else character(0)
+
+  # ---- 5. Body rows (first \midrule + 1 to \bottomrule - 1) ----
+  bottomrule_idx <- grep("^\\\\bottomrule", lines)[1]
+  body_rows <- if (!is.na(first_midrule) && !is.na(bottomrule_idx) &&
+                   bottomrule_idx > first_midrule + 1L)
+    lines[(first_midrule + 1L):(bottomrule_idx - 1L)]
+  else character(0)
+
+  # ---- 6. Note text from \multicolumn{N}{l}{\tiny{...}} ----
+  note_idx  <- grep("\\\\multicolumn.*\\\\tiny", lines)
+  note_text <- if (length(note_idx) > 0)
+    sub("^\\\\multicolumn\\{[0-9]+\\}\\{l\\}\\{\\\\tiny\\{(.+)\\}\\}\\s*$",
+        "\\1", lines[note_idx[1]])
+  else ""
+
+  # ---- Build xltabular column spec: X for label col, c for each data col ----
+  xlt_spec <- paste0("@{} X ", paste(rep("c", n_dat), collapse = " "), " @{}")
+
+  # ---- Numbers row for multi-column tables (appears in both headers) ----
+  numbers_row <- if (n_dat > 1L) {
+    num_cells <- c("", paste0("(", seq_len(n_dat), ")"))
+    paste0(paste(num_cells, collapse = " & "), " \\\\")
+  } else character(0)
+
+  # ---- Significance footnote for \endlastfoot ----
+  sig_note <- sprintf(
+    "\\multicolumn{%d}{@{}l}{\\rule{0pt}{1.5em}\\normalsize $^{*}p<0.05$; $^{**}p<0.01$; $^{***}p<0.001$} \\\\",
+    n_cols
+  )
+
+  # ---- Assemble output ----
+  out <- c(
+    "% xltabular",
+    "{ % replace \\begin{small}",
+    "\\small",
+    sprintf("\\renewcommand{\\arraystretch}{%.1f}", arraystretch),
+    sprintf("\\setlength{\\tabcolsep}{%s}", tabcolsep),
+    "",
+    sprintf("\\begin{xltabular}{\\textwidth}{%s}", xlt_spec),
+    sprintf("\\caption{%s} \\label{%s} \\\\", caption_text, label_text),
+    "\\toprule",
+    numbers_row,
+    header_rows,
+    "\\midrule",
+    "\\endfirsthead",
+    "",
+    sprintf("\\multicolumn{%d}{c}{Table \\ref{%s} (Continued)} \\\\", n_cols, label_text),
+    "\\toprule",
+    numbers_row,
+    "\\midrule",
+    "\\endhead",
+    "",
+    "\\bottomrule",
+    sig_note,
+    "\\endlastfoot",
+    "",
+    body_rows,
+    "\\end{xltabular}",
+    "}"
+  )
+  if (nchar(trimws(note_text)) > 0)
+    out <- c(out, sprintf("\\noindent \\normalsize %s", note_text))
+
+  writeLines(out, filepath)
   invisible(filepath)
 }
 
@@ -975,7 +1071,7 @@ screenreg(
 # HTML output (all models)
 htmlreg(
   tr_list_full,
-  file               = "Data/Output/tergm_results.html",
+  file               = "Data/Output/tergm_results_robust.html",
   custom.model.names = model_names_long,
   custom.coef.map    = coef_map,
   digits             = 3,
@@ -1001,22 +1097,21 @@ paper_note <- paste0(
 # LaTeX — main paper table (M0–M3, without M1L to keep width manageable)
 texreg(
   tr_list_paper,
-  file               = "Data/Output/tergm_results.tex",
+  file               = "Data/Output/tergm_results_robust.tex",
   custom.model.names = model_names_long,
   custom.coef.map    = coef_map,
   digits             = 3,
   caption            = "TERGM Results: WTO Dispute Initiation (Complainant $\\to$ Respondent), 1995--2024",
   caption.above      = TRUE,
   label              = "tab:tergm_main",
-  fontsize           = "footnotesize",
+  fontsize           = "scriptsize",
   use.packages       = FALSE,
   booktabs           = TRUE,
   dcolumn            = FALSE,
-  sideways           = TRUE,          # landscape — 5 cols fits better sideways
   longtable          = FALSE,
   custom.note        = paper_note
 )
-compress_tex("Data/Output/tergm_results.tex")
+post_process_tex("Data/Output/tergm_results_robust.tex")
 cat("LaTeX (paper) saved to Data/Output/tergm_results.tex\n")
 
 # LaTeX — slides table (M1–M4: progressive channel addition)
@@ -1029,19 +1124,12 @@ texreg(
   caption            = "WTO Dispute Initiation (TERGM), 1995--2024",
   caption.above      = TRUE,
   label              = "tab:tergm_slides",
-  fontsize           = "footnotesize",
+  fontsize           = "scriptsize",
   use.packages       = FALSE,
   booktabs           = TRUE,
-  dcolumn            = FALSE,
-  custom.note        = paste0(
-    "\\textit{Notes:} Bootstrapped TERGM, R = ", BTERGM_BOOTS, " replications. ",
-    "95\\% CIs in brackets. DV = WTO dispute filing (Complainant $\\to$ Respondent). ",
-    "M2 isolates UN voting ideal point distance (no ATOP); ",
-    "M3 adds ATOP alongside UN IP; M4 adds V-Dem democracy controls. ",
-    "Cumulative past cases log-transformed."
-  )
+  dcolumn            = FALSE
 )
-compress_tex("Data/Output/tergm_results_slides.tex")
+post_process_tex("Data/Output/tergm_results_slides.tex")
 cat("Slides LaTeX saved to Data/Output/tergm_results_slides.tex\n")
 
 # ===========================================================================

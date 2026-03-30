@@ -61,6 +61,9 @@
 # ===========================================================================
 
 suppressPackageStartupMessages(library(tidyverse))
+library(conflicted)
+conflicts_prefer(dplyr::select)
+conflicts_prefer(dplyr::filter)
 
 # ergm.sign is required for estimation; data preparation runs without it
 ERGM_SIGN_AVAILABLE <- tryCatch({
@@ -135,7 +138,7 @@ for (v in grep("^cum_", names(country_meta), value = TRUE)) {
 
 # Map: C-R -> -1 (strong), TP-R -> -1 (weak), C-TP -> +1
 signed_edges <- wto_dyadic %>%
-  filter(!is.na(consultation_year)) %>%
+  dplyr::filter(!is.na(consultation_year)) %>%
   mutate(
     sign = case_when(
       relationship == "complainant-respondent"  ~ -1L,
@@ -147,8 +150,8 @@ signed_edges <- wto_dyadic %>%
     node_b = pmax(iso3_1, iso3_2),
     year   = as.integer(consultation_year)
   ) %>%
-  filter(!is.na(sign)) %>%
-  select(year, node_a, node_b, sign, relationship, case_id = case)
+    dplyr::filter(!is.na(sign)) %>%
+    dplyr::select(year, node_a, node_b, sign, relationship, case_id = case)
 
 cat("\nSigned edges by type:\n")
 print(table(signed_edges$sign, signed_edges$relationship))
@@ -180,7 +183,7 @@ signed_agg %>%
 #   C-TP : 0   (excluded from filter below)
 # ---------------------------------------------------------------------------
 severity_agg <- wto_dyadic %>%
-  filter(!is.na(consultation_year),
+    dplyr::filter(!is.na(consultation_year),
          relationship %in% c("complainant-respondent", "third_party-respondent")) %>%
   mutate(
     node_a = pmin(iso3_1, iso3_2),
@@ -209,7 +212,7 @@ plot_data <- signed_agg %>%
 
 ggplot(plot_data, aes(x = year, y = Count, color = Relationship_Type, linetype = Relationship_Type)) +
     # Add points and lines
-    geom_line(size = 1) +
+    geom_line(linewidth = 1) +
     geom_point(size = 2) +
     # Customizing Colors (Academic palettes: Red for Conflict, Blue/Black for Cooperation)
     scale_color_manual(values = c("Negative" = "#D55E00", "Positive" = "#0072B2")) +
@@ -250,14 +253,14 @@ EXCLUDED   <- c("MAC", "HKG", "SOM", "PRK")
 
 # Filter edge list, panel, and meta
 signed_agg_clean <- signed_agg %>%
-  filter(year >= YEAR_START, year <= YEAR_END,
+    dplyr::filter(year >= YEAR_START, year <= YEAR_END,
          !node_a %in% EXCLUDED, !node_b %in% EXCLUDED)
 ergm_panel <- ergm_panel %>%
-  filter(year >= YEAR_START, year <= YEAR_END,
+    dplyr::filter(year >= YEAR_START, year <= YEAR_END,
          !exporter %in% EXCLUDED, !importer %in% EXCLUDED)
-country_meta <- country_meta %>% filter(!iso3c %in% EXCLUDED)
+country_meta <- country_meta %>% dplyr::filter(!iso3c %in% EXCLUDED)
 severity_agg_clean <- severity_agg %>%
-  filter(year >= YEAR_START, year <= YEAR_END,
+    dplyr::filter(year >= YEAR_START, year <= YEAR_END,
          !node_a %in% EXCLUDED, !node_b %in% EXCLUDED)
 
 # Full node set (from signed edges)
@@ -265,10 +268,10 @@ all_nodes <- sort(unique(c(signed_agg_clean$node_a, signed_agg_clean$node_b)))
 n_nodes   <- length(all_nodes)
 
 # No-EUN node set
-signed_agg_noeun   <- signed_agg_clean %>% filter(node_a != "EUN", node_b != "EUN")
-ergm_panel_noeun   <- ergm_panel %>% filter(exporter != "EUN", importer != "EUN")
-country_meta_noeun <- country_meta %>% filter(iso3c != "EUN")
-severity_agg_noeun <- severity_agg_clean %>% filter(node_a != "EUN", node_b != "EUN")
+signed_agg_noeun   <- signed_agg_clean %>% dplyr::filter(node_a != "EUN", node_b != "EUN")
+ergm_panel_noeun   <- ergm_panel %>% dplyr::filter(exporter != "EUN", importer != "EUN")
+country_meta_noeun <- country_meta %>% dplyr::filter(iso3c != "EUN")
+severity_agg_noeun <- severity_agg_clean %>% dplyr::filter(node_a != "EUN", node_b != "EUN")
 all_nodes_noeun    <- sort(unique(c(signed_agg_noeun$node_a, signed_agg_noeun$node_b)))
 n_nodes_noeun      <- length(all_nodes_noeun)
 
@@ -288,7 +291,7 @@ country_meta_dem_s <- country_meta %>%
   ungroup()
 
 nodes_missing_vdem_s <- country_meta_dem_s %>%
-  filter(if_any(all_of(intersect(REQUIRED_NODE_VARS_DEM, names(country_meta_dem_s))),
+    dplyr::filter(if_any(all_of(intersect(REQUIRED_NODE_VARS_DEM, names(country_meta_dem_s))),
                 is.na)) %>%
   pull(iso3c) %>% unique()
 
@@ -455,7 +458,7 @@ build_signed_nets <- function(edges_agg, panel, meta, nodes, severity_agg = NULL
 
     # ---- Signed adjacency (+1 / -1 / 0) ----
     adj <- matrix(0L, n, n, dimnames = list(nodes, nodes))
-    edges_yr <- edges_agg %>% filter(year == yr)
+    edges_yr <- edges_agg %>% dplyr::filter(year == yr)
     for (r in seq_len(nrow(edges_yr))) {
       a <- edges_yr$node_a[r]; b <- edges_yr$node_b[r]
       if (a %in% nodes && b %in% nodes) {
@@ -465,7 +468,7 @@ build_signed_nets <- function(edges_agg, panel, meta, nodes, severity_agg = NULL
     }
 
     # ---- Dyadic edge covariates ----
-    df_yr <- panel %>% filter(year == yr)
+    df_yr <- panel %>% dplyr::filter(year == yr)
     mk <- function() matrix(0, n, n, dimnames = list(nodes, nodes))
     trade_m    <- mk(); ally_m     <- mk(); pta_m     <- mk()
     hhi_m      <- mk(); exp_conc_m <- mk(); imp_dep_m <- mk()
@@ -489,7 +492,7 @@ build_signed_nets <- function(edges_agg, panel, meta, nodes, severity_agg = NULL
     # Non-zero only on negative edges; symmetric
     sev_m <- mk()
     if (!is.null(severity_agg)) {
-      sev_yr <- severity_agg %>% filter(year == yr)
+      sev_yr <- severity_agg %>% dplyr::filter(year == yr)
       for (r in seq_len(nrow(sev_yr))) {
         a <- sev_yr$node_a[r]; b <- sev_yr$node_b[r]
         if (a %in% nodes && b %in% nodes)
@@ -501,15 +504,14 @@ build_signed_nets <- function(edges_agg, panel, meta, nodes, severity_agg = NULL
     ally_sev_m <- ally_m * sev_m
 
     # ---- Node attributes ----
-    meta_yr <- meta %>% filter(year == yr) %>% distinct(iso3c, .keep_all = TRUE)
+    meta_yr <- meta %>% dplyr::filter(year == yr) %>% distinct(iso3c, .keep_all = TRUE)
     node_df  <- data.frame(iso3c = nodes, stringsAsFactors = FALSE) %>%
-      left_join(meta_yr %>% select(iso3c,
+      left_join(meta_yr %>% dplyr::select(iso3c,
         any_of(c("log_gdppc", "log_pop", "wto_member",
                  "v2x_polyarchy", "idealpointfp",
                  "cum_complainant", "cum_respondent",
                  "election_binary", "reg_quality"))),
         by = "iso3c")
-
     # ---- Ideal point distance (|ip_i - ip_j|) ----
     # For ip-complete datasets (Models S2 & S3) there are no NAs here;
     # the NA->0 below is a safety guard only (no-op for ip-complete sets).
@@ -642,8 +644,8 @@ ip_dem_s <- build_signed_nets(signed_agg_ip_dem_s, ergm_panel_ip_dem_s,
                               severity_agg_ip_dem_s)
 
 # Unpack full
-signed_net_list       <- full_s$signed_net_list
-networks_combined     <- full_s$networks_combined
+signed_net_list    <- full_s$signed_net_list
+networks_combined  <- full_s$networks_combined
 trade_cov_s        <- full_s$trade_cov_s
 ally_cov_s         <- full_s$ally_cov_s
 pta_cov_s          <- full_s$pta_cov_s
@@ -1157,13 +1159,13 @@ if (ERGM_SIGN_AVAILABLE &&
     # --- Structural ---
     "Pos.edges"                   = "Edges: Positive",
     "Neg.edges"                   = "Edges: Negative",
-    "Pos.gwdeg.fixed.0.5"         = "GW Degree ($+$, decay=0.5)",
-    "Neg.gwdeg.fixed.0.5"         = "GW Degree ($-$, decay=0.5)",
+    "Pos.gwdeg.fixed.0.5"         = "GW Degree ($+$)",
+    "Neg.gwdeg.fixed.0.5"         = "GW Degree ($-$)",
     "gwesf.fixed.0.5"             = "GW Shared Friends (balance)",
     "gwese.fixed.0.5"             = "GW Shared Enemies (balance)",
     # --- Trade ---
-    "Pos.edgecov.trade"           = "Log Bilateral Trade: $+$",
-    "Neg.edgecov.trade"           = "Log Bilateral Trade: $-$",
+    "Pos.edgecov.trade"           = "Bilateral Trade: $+$",
+    "Neg.edgecov.trade"           = "Bilateral Trade: $-$",
     # --- Dyadic political / institutional ---
     "Pos.edgecov.ally"            = "ATOP Alliance: $+$",
     "Neg.edgecov.ally"            = "ATOP Alliance: $-$",
@@ -1179,10 +1181,10 @@ if (ERGM_SIGN_AVAILABLE &&
     "Neg.edgecov.severity"        = "Dispute Severity: $-$",
     "Neg.edgecov.ally_sev"        = "Alliance $\\times$ Severity: $-$",
     # --- Node covariates ---
-    "Pos.nodecov.log_gdppc"       = "Log GDP/capita: $+$",
-    "Neg.nodecov.log_gdppc"       = "Log GDP/capita: $-$",
-    "Pos.nodecov.log_pop"         = "Log Population: $+$",
-    "Neg.nodecov.log_pop"         = "Log Population: $-$",
+    "Pos.nodecov.log_gdppc"       = "GDP/capita: $+$",
+    "Neg.nodecov.log_gdppc"       = "GDP/capita: $-$",
+    "Pos.nodecov.log_pop"         = "Population: $+$",
+    "Neg.nodecov.log_pop"         = "Population: $-$",
     # cum_activity (S1-S3); cum_complainant / cum_respondent (S0)
     "Pos.nodecov.cum_activity"    = "WTO Activity (cum.): $+$",
     "Neg.nodecov.cum_activity"    = "WTO Activity (cum.): $-$",
@@ -1193,23 +1195,23 @@ if (ERGM_SIGN_AVAILABLE &&
     "Pos.nodecov.v2x_polyarchy"   = "Democracy (V-Dem): $+$",
     "Neg.nodecov.v2x_polyarchy"   = "Democracy (V-Dem): $-$",
     # --- Dyadic gaps ---
-    "Pos.edgecov.gdp_diff"        = "|GDP/capita Gap|: $+$",
-    "Neg.edgecov.gdp_diff"        = "|GDP/capita Gap|: $-$",
-    "Pos.edgecov.pop_diff"        = "|Population Gap|: $+$",
-    "Neg.edgecov.pop_diff"        = "|Population Gap|: $-$"
+    "Pos.edgecov.gdp_diff"        = "GDP/capita Gap: $+$",
+    "Neg.edgecov.gdp_diff"        = "GDP/capita Gap: $-$",
+    "Pos.edgecov.pop_diff"        = "Population Gap: $+$",
+    "Neg.edgecov.pop_diff"        = "Population Gap: $-$"
   )
 
   # Informative model names
   model_names_s_short  <- c("S0: No-EUN", "S1: Baseline", "S2: +UN Align", "S3: +Ally+UN", "S4: +Democracy")
-  model_names_s_long   <- c("(1) No-EUN", "(2) Baseline", "(3) +UN Align", "(4) +Ally+UN", "(5) +Democracy")
-  model_names_s_slides <- c("(1) Baseline", "(2) +UN Align", "(3) +Democracy")
+  model_names_s_long   <- c("No-EUN", "Baseline", "+UN Align", "+Ally+UN", "+Democracy")
+  model_names_s_slides <- c("Baseline", "+UN Align", "+Ally+UN", "+Democracy")
 
   # Pre-extract and normalise coefficient names for all output formats
   tr_list_s_full   <- lapply(list(sergm_s0, sergm_s1, sergm_s2, sergm_s3, sergm_s4),
                              standardize_coef_names_s)
   tr_list_s_paper  <- tr_list_s_full          # S0-S4 in main paper table
-  tr_list_s_slides <- lapply(list(sergm_s1, sergm_s2, sergm_s4),
-                             standardize_coef_names_s)   # S1, S2, S4 for slides
+  tr_list_s_slides <- lapply(list(sergm_s1, sergm_s2, sergm_s3, sergm_s4),
+                             standardize_coef_names_s)   # S1, S2, S3, S4 for slides
 
   # --- Diagnostic: verify normalisation and coef_map_s coverage ---
   cat("\n--- Normalised coef names per SERGM model ---\n")
@@ -1229,6 +1231,64 @@ if (ERGM_SIGN_AVAILABLE &&
   if (length(missing_from_map_s) == 0 && length(missing_in_models_s) == 0)
     cat("\nAll SERGM coef names matched — table will be complete.\n")
   # -------------------------------------------------------------------------
+
+  # Post-process a texreg-generated .tex to convert tabular -> tabularx with
+  # \columnwidth and consistent column spec.
+  # Also inserts a numbers row in the header and updates the footnote format.
+  post_process_tex <- function(filepath, arraystretch = 1.0, tabcolsep = "3pt",
+                               label_width = "2.6cm") {
+    lines <- readLines(filepath)
+    lines <- lines[!grepl("arraystretch|tabcolsep", lines)]
+    tab_idx <- grep("^\\\\begin\\{tabular\\}", lines)
+    for (idx in tab_idx) {
+      all_braces <- regmatches(lines[idx], gregexpr("\\{[^}]+\\}", lines[idx]))[[1]]
+      if (length(all_braces) == 0) next
+      spec <- gsub("[{}]", "", all_braces[length(all_braces)])
+      cols <- strsplit(trimws(spec), "\\s+")[[1]]
+      cols <- cols[cols != "" & !grepl("^@", cols)]
+      n_dat <- length(cols) - 1L
+      if (n_dat < 1L) next
+      new_spec <- paste0("@{} p{", label_width, "} ",
+        paste(rep(">{\\centering\\arraybackslash}X", n_dat), collapse = " "), " @{}")
+      lines[idx] <- sprintf("\\begin{tabularx}{\\columnwidth}{%s}", new_spec)
+    }
+    lines <- sub("^(\\s*\\\\end\\{tabular\\}\\s*)$", "\\\\end{tabularx}", lines, perl = TRUE)
+    tx_idx <- grep("^\\\\begin\\{tabularx\\}", lines)[1]
+    if (!is.na(tx_idx)) {
+      insert <- c(sprintf("\\renewcommand{\\arraystretch}{%.2f}", arraystretch),
+                  sprintf("\\setlength{\\tabcolsep}{%s}", tabcolsep))
+      lines <- c(lines[seq_len(tx_idx - 1L)], insert, lines[tx_idx:length(lines)])
+    }
+    # Insert numbers row before model names in header (if multi-column)
+    toprule_idx <- grep("^\\\\toprule", lines)[1]
+    midrule_idx <- grep("^\\\\midrule", lines)[1]
+    if (!is.na(toprule_idx) && !is.na(midrule_idx) && midrule_idx > toprule_idx + 1L) {
+      header_line <- lines[toprule_idx + 1L]
+      n_amp <- length(gregexpr("&", header_line)[[1]])
+      if (n_amp > 1L) {
+        num_cells   <- c("", paste0("(", seq_len(n_amp), ")"))
+        numbers_row <- paste0(paste(num_cells, collapse = " & "), " \\\\")
+        lines <- c(lines[seq_len(toprule_idx)],
+                   numbers_row,
+                   lines[(toprule_idx + 1L):length(lines)])
+      }
+    }
+    # Update multicolumn footnote: {l}{...} -> {@{}l}{\rule{0pt}{1.5em}\normalsize ...}
+    # Pass 1: remove \tiny wrapper
+    lines <- gsub(
+      "\\\\multicolumn\\{([0-9]+)\\}\\{l\\}\\{\\\\tiny\\{(.+)\\}\\}",
+      "\\\\multicolumn{\\1}{@{}l}{\\\\rule{0pt}{1.5em}\\\\normalsize \\2}",
+      lines, perl = TRUE
+    )
+    # Pass 2: plain multicolumn (no \tiny)
+    lines <- gsub(
+      "^(\\\\multicolumn\\{[0-9]+\\})\\{l\\}\\{",
+      "\\1{@{}l}{\\\\rule{0pt}{1.5em}\\\\normalsize ",
+      lines, perl = TRUE
+    )
+    writeLines(lines, filepath)
+    invisible(filepath)
+  }
 
   # Screen output (all models)
   screenreg(
@@ -1273,17 +1333,18 @@ if (ERGM_SIGN_AVAILABLE &&
     caption            = "SERGM Results: WTO Signed Network Analysis, 1995--2024",
     caption.above      = TRUE,
     label              = "tab:sergm_main",
-    fontsize           = "small",
+    fontsize           = "scriptsize",
     use.packages       = FALSE,
     booktabs           = TRUE,
     dcolumn            = FALSE,
     sideways           = TRUE,
     longtable          = FALSE,
-    custom.note        = sergm_note
+    custom.note        = "$^{*}p<0.05$; $^{**}p<0.01$; $^{***}p<0.001$"
   )
+  post_process_tex("Data/Output/sergm_results.tex")
   cat("LaTeX (paper) saved to Data/Output/sergm_results.tex\n")
 
-  # LaTeX — slides table (S1, S2, S3)
+  # LaTeX — slides table (S1, S2, S3, S4)
   texreg(
     tr_list_s_slides,
     file               = "Data/Output/sergm_results_slides.tex",
@@ -1293,18 +1354,15 @@ if (ERGM_SIGN_AVAILABLE &&
     caption            = "WTO Signed Network (SERGM), 1995--2024",
     caption.above      = TRUE,
     label              = "tab:sergm_slides",
-    fontsize           = "footnotesize",
+    fontsize           = "scriptsize",
     use.packages       = FALSE,
     booktabs           = TRUE,
     dcolumn            = FALSE,
     sideways           = FALSE,
     longtable          = FALSE,
-    custom.note        = paste0(
-      "\\textit{Notes:} Pooled MPLE-SERGM. Positive edge = cooperation (C--TP alignment); ",
-      "Negative edge = dispute (C$\\to$R or TP$\\to$R). ",
-      "S1: EUN baseline; S2: $+$ UN voting distance; S3: $+$ V-Dem democracy."
-    )
+    custom.note        = "$^{*}p<0.05$; $^{**}p<0.01$; $^{***}p<0.001$"
   )
+  post_process_tex("Data/Output/sergm_results_slides.tex")
   cat("LaTeX (slides) saved to Data/Output/sergm_results_slides.tex\n")
 
 } else {

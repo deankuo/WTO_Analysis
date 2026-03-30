@@ -21,6 +21,7 @@ notes.md
 *.ipynb
 /Archive/
 .Rhistory
+*.tex
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
