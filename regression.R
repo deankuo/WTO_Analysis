@@ -678,7 +678,7 @@ cat("  Ally dyad-years:", sum(dyad_panel_h3$atopally == 1), "\n")
 #      Vatican) after fill; those dyads are dropped by the model's listwise
 #      deletion, which is correct (same as TERGM ip-complete set).
 # ---------------------------------------------------------------------------
-h3_impute_vars <- c("log_gdppc", "log_pop", "v2x_polyarchy", "idealpointfp")
+h3_impute_vars <- c("log_gdppc", "log_pop", "v2x_polyarchy", "idealpointfp", "pta")
 meta_h3 <- meta %>%
     group_by(iso3c) %>%
     arrange(year) %>%
@@ -818,13 +818,13 @@ modelsummary(
 
 coef_map_h3_out <- list(
     "atopally"             = "ATOP Alliance",
-    "log_trade_c"          = "Bilateral Trade",
+    "log_trade_c"          = "Bilateral Trade (centered)",
     "atopally:log_trade_c" = "Alliance × Trade",
     "atopally:democracy_c" = "Alliance × Democracy",
     "log_gdppc_c"          = "GDP/cap: Complainant",
     "log_gdppc_r"          = "GDP/cap: Respondent",
     "ip_distance"          = "UN Voting Distance",
-    "democracy_c"          = "Democracy",
+    "democracy_c"          = "Complainant Democracy",
     "log_cum_comp"         = "Cumul. Complaints",
     "log_cum_resp"         = "Cumul. Respondent"
 )
@@ -833,31 +833,6 @@ coef_map_h3_out <- list(
 vcov_h3_1 <- vcovCL(m_h3_1_glm, cluster = ~ dyad_id, data = dyad_panel_h3)
 vcov_h3_2 <- vcovCL(m_h3_2_glm, cluster = ~ dyad_id, data = dyad_panel_h3)
 vcov_h3_3 <- vcovCL(m_h3_3_glm, cluster = ~ dyad_id, data = dyad_panel_h3)
-
-se_h3_1 <- sqrt(diag(vcov_h3_1))
-se_h3_2 <- sqrt(diag(vcov_h3_2))
-se_h3_3 <- sqrt(diag(vcov_h3_3))
-
-pv_h3_1 <- 2 * pnorm(-abs(coef(m_h3_1_glm) / se_h3_1))
-pv_h3_2 <- 2 * pnorm(-abs(coef(m_h3_2_glm) / se_h3_2))
-pv_h3_3 <- 2 * pnorm(-abs(coef(m_h3_3_glm) / se_h3_3))
-
-texreg(
-    list(m_h3_1_glm, m_h3_2_glm, m_h3_3_glm),
-    file               = "Data/Output/h3_logit_results.tex",
-    custom.coef.map    = coef_map_h3_out,
-    override.se        = list(se_h3_1, se_h3_2, se_h3_3),
-    override.pvalues   = list(pv_h3_1, pv_h3_2, pv_h3_3),
-    omit.coef          = "^factor\\(decade\\)",
-    custom.model.names = c("Baseline", "+Interaction", "+Democracy"),
-    caption            = "Alliance and WTO Dispute Initiation: Logit (H3)",
-    label              = "tab:h3_logit",
-    booktabs           = TRUE,
-    dcolumn            = FALSE,
-    use.packages       = FALSE,
-    custom.note        = "Cluster-robust SE by dyad."
-)
-post_process_tex("Data/Output/h3_logit_results.tex")
 
 modelsummary(
     list("(1) Baseline"     = m_h3_1_glm,
@@ -907,60 +882,52 @@ cat("Severity mean (non-ally):",
 
 # H4.1 — Alliance + disputed-sector trade + decade FE
 lm_h4_1 <- lm(severity_score ~
-                 atopally +
-                 log_disp_trade +
-                 decade,
-               data = h4_data)
+                  atopally +
+                  log_disp_trade +
+                  decade,
+              data = h4_data)
 
 # H4.2 — + full economic controls
 lm_h4_2 <- lm(severity_score ~
-                 atopally +
-                 log_disp_trade +
-                 exp_dep_cr +
-                 log_total_trade +
-                 gdppc_diff +
-                 log_gdppc_c +
-                 log_gdppc_r +
-                 pta_depth +
-                 decade,
-               data = h4_data)
+                  atopally +
+                  log_disp_trade +
+                  exp_dep_cr +
+                  log_total_trade +
+                  log_gdppc_c +
+                  log_gdppc_r +
+                  decade,
+              data = h4_data)
 
-# H4.3 — + political/relational controls
+# H4.3 — + political/relational controls + interaction term
 lm_h4_3 <- lm(severity_score ~
-                 atopally +
-                 log_disp_trade +
-                 exp_dep_cr +
-                 log_total_trade +
-                 gdppc_diff +
-                 log_gdppc_c +
-                 log_gdppc_r +
-                 pta_depth +
-                 ip_distance +
-                 democracy_c +
-                 log_cum_comp +
-                 log_cum_resp +
-                 n_third_parties +
-                 decade,
-               data = h4_data)
+                  atopally * democracy_c +
+                  log_disp_trade +
+                  exp_dep_cr +
+                  ip_distance +
+                  log_total_trade +
+                  log_gdppc_c +
+                  log_gdppc_r +
+                  log_cum_comp +
+                  log_cum_resp +
+                  n_third_parties +
+                  decade,
+              data = h4_data)
 
 # H4.4 — + dispute type (product vs. policy)
 lm_h4_4 <- lm(severity_score ~
-                 atopally +
-                 log_disp_trade +
-                 exp_dep_cr +
-                 log_total_trade +
-                 gdppc_diff +
-                 log_gdppc_c +
-                 log_gdppc_r +
-                 pta_depth +
-                 ip_distance +
-                 democracy_c +
-                 log_cum_comp +
-                 log_cum_resp +
-                 n_third_parties +
-                 is_product_case +
-                 decade,
-               data = h4_data)
+                  atopally * democracy_c +
+                  log_disp_trade +
+                  exp_dep_cr +
+                  log_total_trade +
+                  log_gdppc_c +
+                  log_gdppc_r +
+                  ip_distance +
+                  log_cum_comp +
+                  log_cum_resp +
+                  n_third_parties +
+                  is_product_case +
+                  decade,
+              data = h4_data)
 
 # Clustered SEs by complainant
 clust_h4_1 <- coeftest(lm_h4_1, vcov = vcovCL(lm_h4_1, cluster = ~ iso3_c))
@@ -972,6 +939,22 @@ cat("\n--- H4.1 (clustered SE) ---\n"); print(clust_h4_1)
 cat("\n--- H4.2 (clustered SE) ---\n"); print(clust_h4_2)
 cat("\n--- H4.3 (clustered SE) ---\n"); print(clust_h4_3)
 cat("\n--- H4.4 (clustered SE) ---\n"); print(clust_h4_4)
+
+cat("\n====== H4: modelsummary (screen preview) ======\n")
+modelsummary(
+    list("(1) Baseline"   = lm_h4_1,
+         "(2) +Economic"  = lm_h4_2,
+         "(3) +Political" = lm_h4_3,
+         "(4) +Type"      = lm_h4_4),
+    vcov     = list(vcovCL(lm_h4_1, cluster = ~ iso3_c),
+                    vcovCL(lm_h4_2, cluster = ~ iso3_c),
+                    vcovCL(lm_h4_3, cluster = ~ iso3_c),
+                    vcovCL(lm_h4_4, cluster = ~ iso3_c)),
+    coef_omit = "decade",
+    stars    = c("*" = 0.05, "**" = 0.01, "***" = 0.001),
+    gof_map  = c("nobs", "r.squared", "adj.r.squared"),
+    title    = "Alliance and Political Framing Intensity of WTO Disputes: OLS (H4)"
+)
 
 # =============================================================================
 # 5. OUTPUT TABLES
@@ -1034,8 +1017,17 @@ post_process_tex <- function(filepath, arraystretch = 0.9, tabcolsep = "2pt") {
         "\\1", lines[note_idx[1]])
   else ""
 
-  # ---- Build xltabular column spec: X for label col, c for each data col ----
-  xlt_spec <- paste0("@{} X ", paste(rep("c", n_dat), collapse = " "), " @{}")
+  # ---- Build xltabular column spec ----
+  # Use X (stretchy) only for 5+ model tables; fixed p{} for fewer models to
+  # prevent the label column from consuming most of \textwidth.
+  first_col <- if (n_dat >= 5L) {
+    "X"
+  } else {
+    widths <- c("0.55", "0.48", "0.42", "0.38")
+    w <- widths[min(n_dat, 4L)]
+    sprintf(">{{\\raggedright\\arraybackslash}}p{%s\\textwidth}", w)
+  }
+  xlt_spec <- paste0("@{} ", first_col, " ", paste(rep("c", n_dat), collapse = " "), " @{}")
 
   # ---- Numbers row (appears in both headers; omitted for single-model tables) ----
   numbers_row <- if (n_dat > 1L) {
@@ -1104,28 +1096,27 @@ coef_map_h2 <- list(
 )
 
 coef_map_h3 <- list(
-  "atopally"        = "ATOP Alliance",
-  "log_total_trade" = "Bilateral Trade",
-  "gdppc_diff"      = "GDP/cap Gap",
-  "log_gdppc_c"     = "GDP/cap: Complainant",
-  "log_gdppc_r"     = "GDP/cap: Respondent",
-  "ip_distance"     = "UN Voting Distance",
-  "democracy_c"     = "Complainant Democracy",
-  "pta_depth"       = "PTA Depth",
-  "log_cum_comp"    = "Cumul. Complaints",
-  "n_third_parties" = "N Third Parties",
-  "is_product_case" = "Product Case"
+  "atopally"             = "ATOP Alliance",
+  "log_trade_c"          = "Bilateral Trade (centered)",
+  "atopally:log_trade_c" = "Alliance × Trade",
+  "atopally:democracy_c" = "Alliance × Democracy",
+  "log_gdppc_c"          = "GDP/cap: Complainant",
+  "log_gdppc_r"          = "GDP/cap: Respondent",
+  "ip_distance"          = "UN Voting Distance",
+  "democracy_c"          = "Complainant Democracy",
+  "log_cum_comp"         = "Cumul. Complaints",
+  "log_cum_resp"         = "Cumul. Respondent"
 )
 
 coef_map_h4 <- list(
-  "atopally"        = "ATOP Alliance",
-  "log_disp_trade"  = "Disputed Sector Trade",
+  "atopally"             = "ATOP Alliance",
+  "atopally:democracy_c" = "Alliance × Democracy",
+  "log_disp_trade"       = "Disputed Sector Trade",
   "exp_dep_cr"      = "Export Dependence (Sector)",
   "log_total_trade" = "Bilateral Trade",
   "gdppc_diff"      = "GDP/cap Gap",
   "log_gdppc_c"     = "GDP/cap: Complainant",
   "log_gdppc_r"     = "GDP/cap: Respondent",
-  "pta_depth"       = "PTA Depth",
   "ip_distance"     = "UN Voting Distance",
   "democracy_c"     = "Complainant Democracy",
   "log_cum_comp"    = "Cumul. Complaints",
@@ -1134,20 +1125,16 @@ coef_map_h4 <- list(
   "is_product_case" = "Product Case"
 )
 
-# H3 clustered SE overrides
+# H3 clustered SE overrides (dyad-year logit, 3 models; GLM uses z-test → Pr(>|z|))
 h3_ses <- list(
   clust_h3_1[, "Std. Error"],
   clust_h3_2[, "Std. Error"],
-  clust_h3_3[, "Std. Error"],
-  clust_h3_4[, "Std. Error"],
-  clust_h3_5[, "Std. Error"]
+  clust_h3_3[, "Std. Error"]
 )
 h3_pvs <- list(
-  clust_h3_1[, "Pr(>|t|)"],
-  clust_h3_2[, "Pr(>|t|)"],
-  clust_h3_3[, "Pr(>|t|)"],
-  clust_h3_4[, "Pr(>|t|)"],
-  clust_h3_5[, "Pr(>|t|)"]
+  clust_h3_1[, "Pr(>|z|)"],
+  clust_h3_2[, "Pr(>|z|)"],
+  clust_h3_3[, "Pr(>|z|)"]
 )
 
 # Helper: extract Cox robust into texreg object
@@ -1194,17 +1181,16 @@ screenreg(
   caption = "Cox PH: Alliance and Time to Panel Escalation (Robustness)"
 )
 
-cat("\n====== H3: OLS — Economic Stakes ======\n")
+cat("\n====== H3: Dyad-Year Logit — Dispute Initiation ======\n")
 screenreg(
-  list(lm_h3_1, lm_h3_2, lm_h3_3, lm_h3_4, lm_h3_5),
+  list(m_h3_1_glm, m_h3_2_glm, m_h3_3_glm),
   override.se      = h3_ses,
   override.pvalues = h3_pvs,
-  custom.model.names = c("H3.1 Baseline", "H3.2 +Node",
-                         "H3.3 Full", "H3.4 Products", "H3.5 Dep"),
+  custom.model.names = c("M1 Baseline", "M2 +Interact", "M3 +DemInteract"),
   custom.coef.map  = coef_map_h3,
-  omit.coef        = "factor\\(consultation_year\\)",
+  omit.coef        = "factor\\(decade\\)",
   digits           = 3,
-  caption = "OLS: Alliance and Economic Stakes of Disputes (H3)"
+  caption = "Logit: Alliance and WTO Dispute Initiation (H3)"
 )
 
 # ---------------------------------------------------------------------------
@@ -1251,26 +1237,27 @@ post_process_tex("Data/Output/h2_cox_results.tex")
 cat("H2 Cox robustness LaTeX saved.\n")
 
 # ---------------------------------------------------------------------------
-# LaTeX: H3 OLS
+# LaTeX: H3 Logit (appendix)
 # ---------------------------------------------------------------------------
 texreg(
-  list(lm_h3_1, lm_h3_2, lm_h3_3, lm_h3_4, lm_h3_5),
+  list(m_h3_1_glm, m_h3_2_glm, m_h3_3_glm),
   override.se        = h3_ses,
   override.pvalues   = h3_pvs,
-  file               = "Data/Output/h3_ols_results.tex",
-  custom.model.names = c("Baseline", "+Node Attrs", "+Controls", "+Products", "+Dep"),
+  file               = "Data/Output/h3_logit_results.tex",
+  custom.model.names = c("Baseline", "+Interact", "+DemInteract"),
   custom.coef.map    = coef_map_h3,
-  omit.coef          = "factor\\(consultation_year\\)",
+  omit.coef          = "factor\\(decade\\)",
   digits             = 3,
-  caption            = "Alliance and Economic Stakes of WTO Disputes: OLS (H3)",
+  caption            = "Alliance and WTO Dispute Initiation: Dyad-Year Logit (H3)",
   caption.above      = TRUE,
-  label              = "tab:h3_ols",
+  label              = "tab:h3_logit",
   use.packages       = FALSE,
   booktabs           = TRUE,
-  custom.note        = ""
+  dcolumn            = FALSE,
+  custom.note        = "Cluster-robust SE by dyad."
 )
-post_process_tex("Data/Output/h3_ols_results.tex")
-cat("H3 OLS LaTeX saved.\n")
+post_process_tex("Data/Output/h3_logit_results.tex")
+cat("H3 logit LaTeX saved.\n")
 
 # ---------------------------------------------------------------------------
 # H4 clustered SE overrides
@@ -1323,6 +1310,22 @@ texreg(
 post_process_tex("Data/Output/h4_ols_results.tex")
 cat("H4 OLS LaTeX saved.\n")
 
+modelsummary(
+    list("(1) Baseline"   = lm_h4_1,
+         "(2) +Economic"  = lm_h4_2,
+         "(3) +Political" = lm_h4_3,
+         "(4) +Type"      = lm_h4_4),
+    vcov     = list(vcovCL(lm_h4_1, cluster = ~ iso3_c),
+                    vcovCL(lm_h4_2, cluster = ~ iso3_c),
+                    vcovCL(lm_h4_3, cluster = ~ iso3_c),
+                    vcovCL(lm_h4_4, cluster = ~ iso3_c)),
+    coef_map = coef_map_h4,
+    coef_omit = "decade",
+    stars    = c("*" = 0.05, "**" = 0.01, "***" = 0.001),
+    gof_map  = c("nobs", "r.squared", "adj.r.squared"),
+    title    = "Alliance and Political Framing Intensity of WTO Disputes: OLS (H4)"
+)
+
 # ===========================================================================
 # 6. MAIN-IV PAPER / SLIDES TABLES
 #    Key IVs only — full-control versions above serve as appendix tables.
@@ -1338,10 +1341,12 @@ coef_map_h2_main <- list(
 )
 
 coef_map_h3_main <- list(
-  "atopally"        = "ATOP Alliance",
-  "log_total_trade" = "Bilateral Trade",
-  "pta_depth"       = "PTA Depth",
-  "is_product_case" = "Product Case"
+  "atopally"             = "ATOP Alliance",
+  "log_trade_c"          = "Bilateral Trade (centered)",
+  "atopally:log_trade_c" = "Alliance × Trade",
+  "atopally:democracy_c" = "Alliance × Democracy",
+  "ip_distance"          = "UN Voting Distance",
+  "democracy_c"          = "Complainant Democracy"
 )
 
 coef_map_h4_main <- list(
@@ -1387,25 +1392,26 @@ texreg(
 post_process_tex("Data/Output/h2_cox_main.tex")
 cat("H2 Cox main table saved.\n")
 
-# ---- H3 OLS: main paper table ----
+# ---- H3 logit: main paper table ----
 texreg(
-  list(lm_h3_1, lm_h3_2, lm_h3_3, lm_h3_4, lm_h3_5),
+  list(m_h3_1_glm, m_h3_2_glm, m_h3_3_glm),
   override.se        = h3_ses,
   override.pvalues   = h3_pvs,
-  file               = "Data/Output/h3_ols_main.tex",
-  custom.model.names = c("Baseline", "+Node Attrs", "+Controls", "+Products", "+Dep"),
+  file               = "Data/Output/h3_logit_main.tex",
+  custom.model.names = c("Baseline", "+Interact", "+DemInteract"),
   custom.coef.map    = coef_map_h3_main,
-  omit.coef          = "factor\\(consultation_year\\)",
+  omit.coef          = "factor\\(decade\\)",
   digits             = 3,
-  caption            = "Alliance and Economic Stakes of WTO Disputes: OLS (H3)",
+  caption            = "Alliance and WTO Dispute Initiation: Logit (H3)",
   caption.above      = TRUE,
-  label              = "tab:h3_ols",
+  label              = "tab:h3_logit_main",
   use.packages       = FALSE,
   booktabs           = TRUE,
+  dcolumn            = FALSE,
   custom.note        = ""
 )
-post_process_tex("Data/Output/h3_ols_main.tex")
-cat("H3 OLS main table saved.\n")
+post_process_tex("Data/Output/h3_logit_main.tex")
+cat("H3 logit main table saved.\n")
 
 # ---- H4 OLS: main paper table ----
 texreg(
@@ -1432,15 +1438,15 @@ cat("H4 OLS main table saved.\n")
 # ---------------------------------------------------------------------------
 htmlreg(
   list(tr_ol1, tr_ol2, tr_ol3, tr_ol4,
-       lm_h3_1, lm_h3_3, lm_h3_4),
-  override.se      = c(list(NULL, NULL, NULL, NULL), h3_ses[c(1, 3, 4)]),
-  override.pvalues = c(list(NULL, NULL, NULL, NULL), h3_pvs[c(1, 3, 4)]),
+       m_h3_1_glm, m_h3_2_glm, m_h3_3_glm),
+  override.se      = c(list(NULL, NULL, NULL, NULL), h3_ses),
+  override.pvalues = c(list(NULL, NULL, NULL, NULL), h3_pvs),
   file               = "Data/Output/h2_h3_results.html",
   custom.model.names = c("H2(1)", "H2(2)", "H2(3)", "H2(4)",
-                         "H3(1)", "H3(3)", "H3(4)"),
+                         "H3(1)", "H3(2)", "H3(3)"),
   custom.coef.map    = c(coef_map_h2,
                          coef_map_h3[!names(coef_map_h3) %in% names(coef_map_h2)]),
-  omit.coef          = "factor\\(consultation_year\\)|decade",
+  omit.coef          = "factor\\(decade\\)",
   digits             = 3,
   caption            = "Alliance Effects on WTO Dispute Behavior (H2 & H3)"
 )

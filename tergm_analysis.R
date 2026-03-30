@@ -1008,8 +1008,17 @@ post_process_tex <- function(filepath, arraystretch = 0.9, tabcolsep = "2pt") {
         "\\1", lines[note_idx[1]])
   else ""
 
-  # ---- Build xltabular column spec: X for label col, c for each data col ----
-  xlt_spec <- paste0("@{} X ", paste(rep("c", n_dat), collapse = " "), " @{}")
+  # ---- Build xltabular column spec ----
+  # Use X (stretchy) only for 5+ model tables; fixed p{} for fewer models to
+  # prevent the label column from consuming most of \textwidth.
+  first_col <- if (n_dat >= 5L) {
+    "X"
+  } else {
+    widths <- c("0.55", "0.48", "0.42", "0.38")
+    w <- widths[min(n_dat, 4L)]
+    sprintf(">{{\\raggedright\\arraybackslash}}p{%s\\textwidth}", w)
+  }
+  xlt_spec <- paste0("@{} ", first_col, " ", paste(rep("c", n_dat), collapse = " "), " @{}")
 
   # ---- Numbers row for multi-column tables (appears in both headers) ----
   numbers_row <- if (n_dat > 1L) {
