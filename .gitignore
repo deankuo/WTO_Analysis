@@ -233,6 +233,9 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# HF deployment (separate git repo — do not track in research repo)
+hf_deploy/
+
 # Marimo
 marimo/_static/
 marimo/_lsp/

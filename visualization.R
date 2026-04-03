@@ -18,9 +18,9 @@ dir.create("./Graph", showWarnings = FALSE)
 theme_wto <- function(base_size = 14) {
   theme_minimal(base_size = base_size) %+replace%
     theme(
-      plot.title         = element_text(face = "bold", size = base_size + 2,
+      plot.title         = element_text(face = "plain", size = base_size + 2,
                                         hjust = 0.5, margin = margin(b = 8)),
-      axis.title         = element_text(face = "bold", size = base_size),
+      axis.title         = element_text(face = "plain", size = base_size),
       axis.title.x       = element_text(margin = margin(t = 8)),
       axis.title.y       = element_text(margin = margin(r = 8)),
       axis.text          = element_text(color = "grey20"),
@@ -83,7 +83,7 @@ make_us_panel <- function(data, x_var, title, fill_color) {
     geom_col(fill = fill_color, width = 0.7) +
     geom_text(aes(label = n), hjust = -0.25, size = 3.8, color = "grey25") +
     scale_x_continuous(expand = expansion(mult = c(0, 0.2))) +
-    labs(title = title, x = "Number of Cases", y = NULL) +
+    labs(title = title, x = NULL, y = NULL) +
     theme_wto(base_size = 13) +
     theme(
       plot.title  = element_text(size = 12, face = "bold", hjust = 0.5,
@@ -156,8 +156,10 @@ doc_plot <- ggplot(doc_plot_data, aes(x = n, y = label)) +
   scale_x_continuous(labels = comma, expand = expansion(mult = c(0, 0.15))) +
   labs(
     # title = "WTO DSB Document Types (Top 15)",
-    x     = "Number of Documents",
-    y     = "Doc Type"
+    # x     = "Number of Documents",
+    # y     = "Doc Type"
+    x       = NULL,
+    y       = NULL
   ) +
   theme_wto(base_size = 14) +
   theme(
@@ -197,7 +199,8 @@ stage_plot <- ggplot(stage_data, aes(x = pct, y = stage)) +
   ) +
   labs(
     # title = "WTO Disputes by Procedural Stage",
-    x     = "Share of Cases",
+    # x     = "Share of Cases",
+    x     = NULL,
     y     = NULL
   ) +
   theme_wto(base_size = 14) +

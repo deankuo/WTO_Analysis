@@ -67,6 +67,18 @@ meta   <- read.csv("Data/country_meta_1995_2024.csv", stringsAsFactors = FALSE)
 
 cat("Dyadic rows total:", nrow(dyadic), "\n")
 
+# Factor Analysis
+dimensions <- dyadic %>%
+    filter(!(relationship %in% c("complainant-third_party", "third_party-respondent"))) %>%
+    select(rhetorical_aggressiveness, systemic_reach, escalation_ultimatum, domestic_victimhood) %>%
+    na.omit() # drop cases after 2024
+fa <- factanal(dimensions,
+               factors = 1,
+               scores = "regression",
+               rotation = "varimax"
+               )
+
+print(fa)
 # =============================================================================
 # 2. BUILD CASE-LEVEL DATASET (one row per C-R pair)
 # =============================================================================
@@ -846,6 +858,98 @@ modelsummary(
     title    = "Alliance and WTO Dispute Initiation: Logit (H3)"
 )
 
+# =============================================================================
+# H3 MARGINAL EFFECTS PLOT — atopally × log_trade_c (M3 final model)
+#
+# Two predicted-probability lines (ally vs non-ally) across the 5th–95th
+# percentile of log bilateral trade. X-axis shows uncentered log_total_trade
+# (more interpretable than the centered version used in the model).
+# CIs via delta method on eta scale, then transformed to probability.
+# =============================================================================
+
+# Complete-case means for controls (matches M3 estimation sample)
+m3_cc <- dyad_panel_h3[complete.cases(
+    dyad_panel_h3[c("dispute", "atopally", "log_trade_c",
+                    "log_gdppc_c", "log_gdppc_r", "ip_distance",
+                    "democracy_c", "log_cum_comp", "log_cum_resp")]
+), ]
+
+trade_seq <- seq(
+    quantile(dyad_panel_h3$log_trade_c, 0.05, na.rm = TRUE),
+    quantile(dyad_panel_h3$log_trade_c, 0.95, na.rm = TRUE),
+    length.out = 200
+)
+
+base_row <- list(
+    log_gdppc_c  = mean(m3_cc$log_gdppc_c,  na.rm = TRUE),
+    log_gdppc_r  = mean(m3_cc$log_gdppc_r,  na.rm = TRUE),
+    ip_distance  = mean(m3_cc$ip_distance,   na.rm = TRUE),
+    democracy_c  = mean(m3_cc$democracy_c,   na.rm = TRUE),
+    log_cum_comp = mean(m3_cc$log_cum_comp,  na.rm = TRUE),
+    log_cum_resp = mean(m3_cc$log_cum_resp,  na.rm = TRUE),
+    decade       = factor(levels(dyad_panel_h3$decade)[1],
+                          levels = levels(dyad_panel_h3$decade))
+)
+
+grid_ally   <- data.frame(atopally = 1, log_trade_c = trade_seq, base_row,
+                           stringsAsFactors = FALSE)
+grid_noally <- data.frame(atopally = 0, log_trade_c = trade_seq, base_row,
+                           stringsAsFactors = FALSE)
+
+# Design matrices (strip LHS so 'dispute' is not required)
+fterms <- delete.response(terms(m_h3_3_glm))
+X1 <- model.matrix(fterms, data = grid_ally,   xlev = m_h3_3_glm$xlevels)
+X0 <- model.matrix(fterms, data = grid_noally, xlev = m_h3_3_glm$xlevels)
+
+# Linear predictors, probabilities, and per-line delta-method CIs
+eta1      <- drop(X1 %*% coef(m_h3_3_glm))
+eta0      <- drop(X0 %*% coef(m_h3_3_glm))
+se_eta1   <- sqrt(rowSums((X1 %*% vcov_h3_3) * X1))
+se_eta0   <- sqrt(rowSums((X0 %*% vcov_h3_3) * X0))
+
+pred_plot_h3 <- bind_rows(
+    data.frame(
+        log_trade_c = trade_seq,
+        prob  = plogis(eta1),
+        lower = plogis(eta1 - 1.96 * se_eta1),
+        upper = plogis(eta1 + 1.96 * se_eta1),
+        ally  = "Ally"
+    ),
+    data.frame(
+        log_trade_c = trade_seq,
+        prob  = plogis(eta0),
+        lower = plogis(eta0 - 1.96 * se_eta0),
+        upper = plogis(eta0 + 1.96 * se_eta0),
+        ally  = "Non-Ally"
+    )
+) %>% mutate(ally = factor(ally, levels = c("Non-Ally", "Ally")))
+
+p_h3_margins <- ggplot(pred_plot_h3,
+    aes(x = log_trade_c, y = prob, color = ally, fill = ally)) +
+    geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.15, color = NA) +
+    geom_line(linewidth = 0.9) +
+    scale_color_manual(
+        values = c("Non-Ally" = "#2166AC", "Ally" = "#D73027"), name = NULL) +
+    scale_fill_manual(
+        values = c("Non-Ally" = "#2166AC", "Ally" = "#D73027"), name = NULL) +
+    scale_y_continuous(labels = scales::label_percent(accuracy = 0.001)) +
+    labs(
+        x = "Log Bilateral Trade (mean-centered)",
+        y = "Predicted P(Dispute Initiation)"
+    ) +
+    theme_minimal(base_size = 11) +
+    theme(
+        legend.position  = "bottom",
+        panel.grid.minor = element_blank()
+    )
+
+p_h3_margins
+
+ggsave("Data/Output/h3_margins.pdf", p_h3_margins,
+       width = 5, height = 4, device = cairo_pdf)
+ggsave("Data/Output/h3_margins.png", p_h3_margins,
+       width = 5, height = 4, dpi = 300)
+cat("H3 marginal effects plot saved.\n")
 
 # =============================================================================
 # 4. H4: POLITICAL FRAMING INTENSITY (OLS)
@@ -960,6 +1064,25 @@ modelsummary(
 # 5. OUTPUT TABLES
 # =============================================================================
 
+# Add \phantom padding so significance stars align across cells in each column.
+# Skips SE rows (parenthesised values like $(0.123)$) and CI rows ([lo; hi]).
+# Rule: *** stays as-is; ** gets \phantom{^{*}}; * gets \phantom{^{**}};
+#       bare numeric cells get \phantom{^{***}}.
+pad_star_cells <- function(lines) {
+  sapply(lines, function(line) {
+    if (!grepl("&", line, fixed = TRUE))      return(line)  # not a data row
+    if (grepl("\\(\\s*[0-9]", line))          return(line)  # SE row: (0.123)
+    if (grepl("[", line, fixed = TRUE))       return(line)  # CI row: [lo; hi]
+    # Trailing star phantoms (normalise cell width to ^{***})
+    line <- gsub("(\\^\\{\\*\\*\\})(\\$)",   "\\1\\\\phantom{^{*}}\\2",   line)
+    line <- gsub("(\\^\\{\\*\\})(\\$)",      "\\1\\\\phantom{^{**}}\\2",  line)
+    line <- gsub("(\\$-?[0-9][^$^]*)(\\$)", "\\1\\\\phantom{^{***}}\\2", line)
+    # Leading minus phantom for positive numbers (align with negatives)
+    line <- gsub("\\$([0-9])",               "$\\\\phantom{-}\\1",        line)
+    line
+  }, USE.NAMES = FALSE)
+}
+
 # Post-process a texreg .tex file → xltabular format matching tergm_results.tex:
 #   • Strips \begin{table}/\end{table} wrapper (xltabular is a longtable variant)
 #   • Converts \begin{tabular}{spec} → \begin{xltabular}{\textwidth}{@{} X c c... @{}}
@@ -1009,6 +1132,7 @@ post_process_tex <- function(filepath, arraystretch = 0.9, tabcolsep = "2pt") {
                    bottomrule_idx > first_midrule + 1L)
     lines[(first_midrule + 1L):(bottomrule_idx - 1L)]
   else character(0)
+  body_rows <- pad_star_cells(body_rows)
 
   # ---- 6. Extra note from custom.note = "..." (texreg \tiny wrapper) ----
   note_idx  <- grep("\\\\multicolumn.*\\\\tiny", lines)

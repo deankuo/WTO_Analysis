@@ -951,6 +951,25 @@ if (length(missing_from_map) == 0 && length(missing_in_models) == 0)
   cat("\nAll coef names matched — table will be complete.\n")
 # -------------------------------------------------------------------------
 
+# Add \phantom padding so significance stars align across cells in each column.
+# Skips SE rows (parenthesised values like $(0.123)$) and CI rows ([lo; hi]).
+# Rule: *** stays as-is; ** gets \phantom{^{*}}; * gets \phantom{^{**}};
+#       bare numeric cells get \phantom{^{***}}.
+pad_star_cells <- function(lines) {
+  sapply(lines, function(line) {
+    if (!grepl("&", line, fixed = TRUE))      return(line)  # not a data row
+    if (grepl("\\(\\s*[0-9]", line))          return(line)  # SE row: (0.123)
+    if (grepl("[", line, fixed = TRUE))       return(line)  # CI row: [lo; hi]
+    # Trailing star phantoms (normalise cell width to ^{***})
+    line <- gsub("(\\^\\{\\*\\*\\})(\\$)",   "\\1\\\\phantom{^{*}}\\2",   line)
+    line <- gsub("(\\^\\{\\*\\})(\\$)",      "\\1\\\\phantom{^{**}}\\2",  line)
+    line <- gsub("(\\$-?[0-9][^$^]*)(\\$)", "\\1\\\\phantom{^{***}}\\2", line)
+    # Leading minus phantom for positive numbers (align with negatives)
+    line <- gsub("\\$([0-9])",               "$\\\\phantom{-}\\1",        line)
+    line
+  }, USE.NAMES = FALSE)
+}
+
 # Convert a texreg-generated .tex to xltabular format matching result_example.tex.
 # Replaces floating table/sidewaystable with a non-floating xltabular that
 # supports page breaks and places the note below the closing brace.
@@ -1000,6 +1019,7 @@ post_process_tex <- function(filepath, arraystretch = 0.9, tabcolsep = "2pt") {
                    bottomrule_idx > first_midrule + 1L)
     lines[(first_midrule + 1L):(bottomrule_idx - 1L)]
   else character(0)
+  body_rows <- pad_star_cells(body_rows)
 
   # ---- 6. Note text from \multicolumn{N}{l}{\tiny{...}} ----
   note_idx  <- grep("\\\\multicolumn.*\\\\tiny", lines)
@@ -1142,39 +1162,181 @@ post_process_tex("Data/Output/tergm_results_slides.tex")
 cat("Slides LaTeX saved to Data/Output/tergm_results_slides.tex\n")
 
 # ===========================================================================
-# 8. GOODNESS-OF-FIT  (Model 2 — UN alignment, main specification)
+# 8. GOODNESS-OF-FIT — All Models (M0–M4), Comparison Plots
+# ===========================================================================
+#
+# Statistics used and why:
+#   ideg, odeg        in/out-degree distributions — basic network structure
+#   triad.directed    directed 16-type triad census:
+#                       "102" = mutual dyad  → reciprocity check
+#                       "030T"/"030C"        → transitive vs cyclic closure
+#                       covers what the professor asked (reciprocity + triadic)
+#   rocpr             ROC + precision-recall — predictive performance
+#
+# Statistics NOT used:
+#   dsp / esp         require ensure_network() → fail for btergm list-of-networks
+#   geodesic          Matrix sparse-matrix error; infeasible for large directed nets
+#
+# Comparison approach: for each statistic, one PDF with 5 panels (one per model)
+# arranged side-by-side so the same indicator is visible across all specifications.
 # ===========================================================================
 
-# GOF on Model 2 (UN alignment only — novel contribution)
-# Statistics used and why:
-#   ideg, odeg : in/out-degree distributions — work reliably for directed btergm
-#   rocpr      : ROC + precision-recall curves — btergm-native fit statistic
-#
-# Statistics NOT used and why:
-#   dsp / esp  : require ensure_network() which fails for btergm list-of-networks;
-#                btergm stores a list not a single basis network — unfixable at runtime
-#   geodesic   : triggers Matrix[<-] sparse-matrix error in recent Matrix versions;
-#                large directed networks make this computationally infeasible anyway
-cat("\n=== Goodness-of-fit (Model 2 — UN alignment) ===\n")
-g <- btergm::gof(model2, statistics = c(triad.directed, fastgreedy.modularity,
-                             rocpr), nsim = 100)
-g
-plot(g)
+suppressPackageStartupMessages({
+    library(png)
+    library(grid)
+    library(gridExtra)
+})
 
-gof_deg <- btergm::gof(model2,
-                        statistics = c(ideg, odeg),
-                        nsim       = 100)
-png("Data/Output/tergm_gof_deg.png", width = 10, height = 5, units = "in", res = 300)
-plot(gof_deg)
-dev.off()
-cat("GOF degree plot saved to Data/Output/tergm_gof_deg.png\n")
+NGOF_ALL <- 200   # simulations per model
 
-gof_roc <- btergm::gof(model2, statistics = c(rocpr), nsim = 100)
-png("Data/Output/tergm_gof_roc.png", width = 8, height = 5, units = "in", res = 300)
-par(mar = c(5, 4, 4, 2))
-plot(gof_roc)
-dev.off()
-cat("GOF ROC/PR plot saved to Data/Output/tergm_gof_roc.png\n")
+gof_model_list <- list(model0, model1, model2, model3, model4)
+gof_model_lbls <- c("M0: No-EUN", "M1: Baseline", "M2: +UN Align",
+                     "M3: +Ally+UN", "M4: +Democracy")
+
+# ---------------------------------------------------------------------------
+# Helper: capture a base R plot expression as a grid rasterGrob
+# ---------------------------------------------------------------------------
+capture_plot_grob <- function(plot_fn, width_px = 900, height_px = 600, res = 150) {
+    tmp <- tempfile(fileext = ".png")
+    on.exit(unlink(tmp), add = TRUE)
+    png(tmp, width = width_px, height = height_px, res = res)
+    tryCatch(
+        plot_fn(),
+        error = function(e) {
+            plot.new()
+            text(0.5, 0.5, paste("Error:", conditionMessage(e)),
+                 cex = 0.7, col = "red")
+        }
+    )
+    dev.off()
+    img <- png::readPNG(tmp)
+    grid::rasterGrob(img, interpolate = TRUE,
+                     width  = unit(1, "npc"),
+                     height = unit(1, "npc"))
+}
+
+# ---------------------------------------------------------------------------
+# Helper: assemble 5-model comparison PDF for a given list of gof objects
+# ---------------------------------------------------------------------------
+make_gof_comparison_pdf <- function(gof_list, labels, outpath, main_title,
+                                    panel_w = 4, panel_h = 4,
+                                    width_px = 900, height_px = 650) {
+    grobs <- lapply(seq_along(gof_list), function(i) {
+        if (is.null(gof_list[[i]])) {
+            return(grid::textGrob(paste0(labels[i], "\n(failed)"),
+                                  gp = grid::gpar(fontsize = 9, col = "grey50")))
+        }
+        capture_plot_grob(
+            function() {
+                plot(gof_list[[i]])
+                title(main = labels[i], cex.main = 0.9, line = 0.3)
+            },
+            width_px = width_px, height_px = height_px
+        )
+    })
+    pdf(outpath, width = panel_w * length(gof_list), height = panel_h + 0.7)
+    gridExtra::grid.arrange(
+        grobs = grobs, nrow = 1,
+        top   = grid::textGrob(main_title,
+                               gp = grid::gpar(fontsize = 12, fontface = "bold"))
+    )
+    dev.off()
+    cat("Saved:", outpath, "\n")
+}
+
+# ---------------------------------------------------------------------------
+# (A) Degree distributions — ideg + odeg
+# ---------------------------------------------------------------------------
+cat("\n=== GOF (all models): in/out-degree distributions ===\n")
+gof_deg_all <- lapply(seq_along(gof_model_list), function(i) {
+    cat(sprintf("  %s ...\n", gof_model_lbls[i]))
+    tryCatch(
+        btergm::gof(gof_model_list[[i]], statistics = c(ideg, odeg),
+                    nsim = NGOF_ALL),
+        error = function(e) { cat("  FAILED:", conditionMessage(e), "\n"); NULL }
+    )
+})
+saveRDS(gof_deg_all, "Data/Output/gof_degree_all.rds")
+make_gof_comparison_pdf(
+    gof_list   = gof_deg_all,
+    labels     = gof_model_lbls,
+    outpath    = "Data/Output/tergm_gof_degree_all.pdf",
+    main_title = "GOF: In/Out-Degree Distributions (M0–M4)",
+    panel_w = 4, panel_h = 3.5, width_px = 1000, height_px = 500
+)
+
+# Backward-compatible single plot for M2 (degree)
+gof_deg <- gof_deg_all[[3]]   # model2 is index 3
+if (!is.null(gof_deg)) {
+    png("Data/Output/tergm_gof_deg.png", width = 10, height = 5,
+        units = "in", res = 300)
+    plot(gof_deg)
+    dev.off()
+    cat("Backward-compat M2 degree plot: Data/Output/tergm_gof_deg.png\n")
+}
+
+# ---------------------------------------------------------------------------
+# (B) Triadic structure + reciprocity — triad.directed (16-type census)
+#     The "102" mutual triad corresponds to dyadic reciprocity.
+#     "030T" = transitive triple, "030C" = cyclic triple.
+# ---------------------------------------------------------------------------
+cat("\n=== GOF (all models): directed triad census (reciprocity + triadic structure) ===\n")
+gof_triad_all <- lapply(seq_along(gof_model_list), function(i) {
+    cat(sprintf("  %s ...\n", gof_model_lbls[i]))
+    tryCatch(
+        btergm::gof(gof_model_list[[i]], statistics = c(triad.directed),
+                    nsim = NGOF_ALL),
+        error = function(e) { cat("  FAILED:", conditionMessage(e), "\n"); NULL }
+    )
+})
+saveRDS(gof_triad_all, "Data/Output/gof_triad_all.rds")
+make_gof_comparison_pdf(
+    gof_list   = gof_triad_all,
+    labels     = gof_model_lbls,
+    outpath    = "Data/Output/tergm_gof_triad_all.pdf",
+    main_title = "GOF: Directed Triad Census — Reciprocity & Triadic Structure (M0–M4)",
+    panel_w = 4, panel_h = 4.5, width_px = 1000, height_px = 750
+)
+
+# ---------------------------------------------------------------------------
+# (C) Predictive performance — ROC + PR curves
+# ---------------------------------------------------------------------------
+cat("\n=== GOF (all models): ROC + precision-recall ===\n")
+gof_roc_all <- lapply(seq_along(gof_model_list), function(i) {
+    cat(sprintf("  %s ...\n", gof_model_lbls[i]))
+    tryCatch(
+        btergm::gof(gof_model_list[[i]], statistics = c(rocpr),
+                    nsim = NGOF_ALL),
+        error = function(e) { cat("  FAILED:", conditionMessage(e), "\n"); NULL }
+    )
+})
+saveRDS(gof_roc_all, "Data/Output/gof_rocpr_all.rds")
+make_gof_comparison_pdf(
+    gof_list   = gof_roc_all,
+    labels     = gof_model_lbls,
+    outpath    = "Data/Output/tergm_gof_rocpr_all.pdf",
+    main_title = "GOF: ROC + Precision-Recall Curves (M0–M4)",
+    panel_w = 3.5, panel_h = 3.5, width_px = 800, height_px = 600
+)
+
+# Backward-compatible single plot for M2 (ROC/PR)
+gof_roc <- gof_roc_all[[3]]
+if (!is.null(gof_roc)) {
+    png("Data/Output/tergm_gof_roc.png", width = 8, height = 5,
+        units = "in", res = 300)
+    par(mar = c(5, 4, 4, 2))
+    plot(gof_roc)
+    dev.off()
+    cat("Backward-compat M2 ROC/PR plot: Data/Output/tergm_gof_roc.png\n")
+}
+
+cat("\n=== GOF outputs ===\n")
+cat("  tergm_gof_degree_all.pdf    — in/out-degree distributions, all models\n")
+cat("  tergm_gof_triad_all.pdf     — triad census (reciprocity + triadic closure), all models\n")
+cat("  tergm_gof_rocpr_all.pdf     — ROC + PR curves, all models\n")
+cat("  tergm_gof_deg.png           — M2 degree (backward-compat)\n")
+cat("  tergm_gof_roc.png           — M2 ROC/PR (backward-compat)\n")
+cat("  gof_degree_all.rds / gof_triad_all.rds / gof_rocpr_all.rds  — saved GOF objects\n")
 
 # ===========================================================================
 # 9. SAVE PREPARED DATA
