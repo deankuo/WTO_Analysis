@@ -281,8 +281,6 @@ print(round(prop.table(fs_tab[!is.na(names(fs_tab))]) * 100, 1))
 
 cat("\n--- Cross-tab: dispute_stage × final_stage ---\n")
 print(table(case_cr$dispute_stage, case_cr$final_stage, useNA = "ifany"))
-case_cr_ <- case_cr %>%
-    filter()
 cat("\n--- MAS cases → final_stage ---\n")
 print(table(
   case_cr$final_stage[case_cr$dispute_stage == "Mutually Agreed"],
