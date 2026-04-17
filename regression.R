@@ -648,7 +648,7 @@ cat("\n--- Logit robustness H2.2 (clustered SE) ---\n"); print(logit_cl_2)
 
 # Build dispute indicator from case_cr
 dispute_indicator <- case_cr %>%
-    filter(consultation_year <= 2023) %>%
+    filter(consultation_year <= 2024) %>%
     select(iso3_c, iso3_r, consultation_year) %>%
     distinct() %>%
     mutate(dispute = 1L)
@@ -768,7 +768,7 @@ m_h3_1_glm <- glm(
         log_gdppc_c + log_gdppc_r +
         ip_distance + democracy_c +
         log_cum_comp + log_cum_resp +
-        factor(decade),
+        factor(year),
     data   = dyad_panel_h3,
     family = binomial()
 )
@@ -778,7 +778,7 @@ m_h3_2_glm <- glm(
         log_gdppc_c + log_gdppc_r +
         ip_distance + democracy_c +
         log_cum_comp + log_cum_resp +
-        factor(decade),
+        factor(year),
     data   = dyad_panel_h3,
     family = binomial()
 )
@@ -788,7 +788,7 @@ m_h3_3_glm <- glm(
         atopally * democracy_c +
         log_gdppc_c + log_gdppc_r +
         ip_distance + log_cum_comp + log_cum_resp +
-        factor(decade),
+        factor(year),
     data   = dyad_panel_h3,
     family = binomial()
 )
@@ -819,7 +819,7 @@ modelsummary(
                  vcovCL(m_h3_3_glm, cluster = ~dyad_id,
                         data = dyad_panel_h3)),
     stars   = c("*" = 0.05, "**" = 0.01, "***" = 0.001),
-    gof_map = c("nobs", "logLik", "AIC", "BIC")
+    gof_map = c("nobs", "logLik", "AIC", "BIC", "r.square")
 )
 
 # -----------------------------------------------------------------------------
@@ -971,7 +971,7 @@ cat("H3 marginal effects plot saved.\n")
 # =============================================================================
 
 h4_data <- case_cr %>%
-  dplyr::filter(!is.na(severity_score),
+  dplyr::filter(!is.na(log_disp_trade),
                 !is.na(atopally),
                 consultation_year <= 2024)
 
@@ -983,30 +983,28 @@ cat("Severity mean (non-ally):",
     round(mean(h4_data$severity_score[h4_data$atopally == 0], na.rm = TRUE), 3), "\n")
 
 # H4.1 — Alliance + disputed-sector trade + decade FE
-lm_h4_1 <- lm(severity_score ~
+lm_h4_1 <- lm(log_disp_trade ~
                   atopally +
-                  log_disp_trade +
+                  severity_score +
                   decade,
               data = h4_data)
 
 # H4.2 — + full economic controls
-lm_h4_2 <- lm(severity_score ~
+lm_h4_2 <- lm(log_disp_trade ~
                   atopally +
-                  log_disp_trade +
+                  severity_score +
                   exp_dep_cr +
-                  log_total_trade +
                   log_gdppc_c +
                   log_gdppc_r +
                   decade,
               data = h4_data)
 
 # H4.3 — + political/relational controls + interaction term
-lm_h4_3 <- lm(severity_score ~
+lm_h4_3 <- lm(log_disp_trade ~
                   atopally * democracy_c +
-                  log_disp_trade +
                   exp_dep_cr +
                   ip_distance +
-                  log_total_trade +
+                  severity_score +
                   log_gdppc_c +
                   log_gdppc_r +
                   log_cum_comp +
@@ -1016,11 +1014,10 @@ lm_h4_3 <- lm(severity_score ~
               data = h4_data)
 
 # H4.4 — + dispute type (product vs. policy)
-lm_h4_4 <- lm(severity_score ~
+lm_h4_4 <- lm(log_disp_trade ~
                   atopally * democracy_c +
-                  log_disp_trade +
                   exp_dep_cr +
-                  log_total_trade +
+                  severity_score +
                   log_gdppc_c +
                   log_gdppc_r +
                   ip_distance +
