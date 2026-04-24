@@ -70,7 +70,7 @@ cat("Dyadic rows total:", nrow(dyadic), "\n")
 # Factor Analysis
 dimensions <- dyadic %>%
     filter(!(relationship %in% c("complainant-third_party", "third_party-respondent"))) %>%
-    select(rhetorical_aggressiveness, systemic_reach, escalation_ultimatum, domestic_victimhood) %>%
+    select(rhetorical_aggressiveness, escalation_ultimatum, domestic_victimhood) %>%
     na.omit() # drop cases after 2024
 fa <- factanal(dimensions,
                factors = 1,
@@ -79,13 +79,16 @@ fa <- factanal(dimensions,
                )
 
 print(fa)
+
+
 # =============================================================================
 # 2. BUILD CASE-LEVEL DATASET (one row per C-R pair)
 # =============================================================================
 
 case_cr <- dyadic %>%
   filter(relationship == "complainant-respondent") %>%
-  rename(iso3_c = iso3_1, iso3_r = iso3_2)
+  rename(iso3_c = iso3_1, iso3_r = iso3_2) %>%
+  mutate(severity_score_v2 = (rhetorical_aggressiveness + escalation_ultimatum + domestic_victimhood) / 3)
 
 cat("C-R observations:", nrow(case_cr), "\n")
 
@@ -973,7 +976,10 @@ cat("H3 marginal effects plot saved.\n")
 h4_data <- case_cr %>%
   dplyr::filter(!is.na(log_disp_trade),
                 !is.na(atopally),
-                consultation_year <= 2024)
+                consultation_year <= 2024) %>%
+    mutate(disp_trade_share = disputed_trade_ij_t0 / (total_trade_cr + 1),
+           log_disp_share = log(disp_trade_share + 0.001)
+           )
 
 cat("\nH4 sample:", nrow(h4_data), "C-R pairs\n")
 cat("Ally pairs in H4:", sum(h4_data$atopally == 1), "\n")
@@ -982,14 +988,17 @@ cat("Severity mean (ally):",
 cat("Severity mean (non-ally):",
     round(mean(h4_data$severity_score[h4_data$atopally == 0], na.rm = TRUE), 3), "\n")
 
-# H4.1 — Alliance + disputed-sector trade + decade FE
+# Nested OLS models: each model adds one conceptual block to the previous.
+# M1 ⊂ M2 ⊂ M3 ⊂ M4; variable order within each formula follows M4.
+
+# H4.1 — Core IVs only
 lm_h4_1 <- lm(log_disp_trade ~
                   atopally +
                   severity_score +
                   decade,
               data = h4_data)
 
-# H4.2 — + full economic controls
+# H4.2 — + Economic controls (exp_dep_cr, GDP/cap)
 lm_h4_2 <- lm(log_disp_trade ~
                   atopally +
                   severity_score +
@@ -999,25 +1008,27 @@ lm_h4_2 <- lm(log_disp_trade ~
                   decade,
               data = h4_data)
 
-# H4.3 — + political/relational controls + interaction term
+# H4.3 — + Political/relational controls (democracy, UN voting, litigation experience, third parties)
 lm_h4_3 <- lm(log_disp_trade ~
-                  atopally * democracy_c +
-                  exp_dep_cr +
-                  ip_distance +
+                  atopally +
+                  democracy_c +
                   severity_score +
+                  exp_dep_cr +
                   log_gdppc_c +
                   log_gdppc_r +
+                  ip_distance +
                   log_cum_comp +
                   log_cum_resp +
                   n_third_parties +
                   decade,
               data = h4_data)
 
-# H4.4 — + dispute type (product vs. policy)
+# H4.4 — + Dispute type (product vs. policy case)
 lm_h4_4 <- lm(log_disp_trade ~
-                  atopally * democracy_c +
-                  exp_dep_cr +
+                  atopally +
+                  democracy_c +
                   severity_score +
+                  exp_dep_cr +
                   log_gdppc_c +
                   log_gdppc_r +
                   ip_distance +
@@ -1039,20 +1050,26 @@ cat("\n--- H4.2 (clustered SE) ---\n"); print(clust_h4_2)
 cat("\n--- H4.3 (clustered SE) ---\n"); print(clust_h4_3)
 cat("\n--- H4.4 (clustered SE) ---\n"); print(clust_h4_4)
 
+add_rows_h4 <- tribble(
+  ~term,            ~`(1) Core`, ~`(2) +Economic`, ~`(3) +Political`, ~`(4) Full`,
+  "Other controls",  "No",       "Yes",            "Yes",             "Yes"
+)
+
 cat("\n====== H4: modelsummary (screen preview) ======\n")
 modelsummary(
-    list("(1) Baseline"   = lm_h4_1,
+    list("(1) Core"       = lm_h4_1,
          "(2) +Economic"  = lm_h4_2,
          "(3) +Political" = lm_h4_3,
-         "(4) +Type"      = lm_h4_4),
+         "(4) Full"       = lm_h4_4),
     vcov     = list(vcovCL(lm_h4_1, cluster = ~ iso3_c),
                     vcovCL(lm_h4_2, cluster = ~ iso3_c),
                     vcovCL(lm_h4_3, cluster = ~ iso3_c),
                     vcovCL(lm_h4_4, cluster = ~ iso3_c)),
-    coef_omit = "decade",
+    coef_map  = coef_map_h4,
+    add_rows  = add_rows_h4,
     stars    = c("*" = 0.05, "**" = 0.01, "***" = 0.001),
     gof_map  = c("nobs", "r.squared", "adj.r.squared"),
-    title    = "Alliance and Political Framing Intensity of WTO Disputes: OLS (H4)"
+    title    = "Alliance and Bilateral Disputed Trade: OLS (H4)"
 )
 
 # =============================================================================
@@ -1084,7 +1101,8 @@ pad_star_cells <- function(lines) {
 #   • Two-row header: (1)(2)... numbers row + model-name row
 #   • \endfirsthead / \endhead (numbers only) / \endlastfoot structure
 #   • Sig footnote hardcoded in \endlastfoot; any custom.note appended below table
-post_process_tex <- function(filepath, arraystretch = 0.9, tabcolsep = "2pt") {
+post_process_tex <- function(filepath, arraystretch = 0.9, tabcolsep = "2pt",
+                             other_controls = NULL) {
   lines <- readLines(filepath)
 
   # ---- 1. Extract caption ----
@@ -1128,6 +1146,20 @@ post_process_tex <- function(filepath, arraystretch = 0.9, tabcolsep = "2pt") {
     lines[(first_midrule + 1L):(bottomrule_idx - 1L)]
   else character(0)
   body_rows <- pad_star_cells(body_rows)
+
+  # Insert "Other controls: No/Yes/..." row just before the inner \midrule
+  # (the midrule that separates coefficient rows from GOF rows in body_rows)
+  if (!is.null(other_controls)) {
+    inner_mid <- which(body_rows == "\\midrule")
+    if (length(inner_mid) > 0) {
+      row_txt <- paste0("Other controls & ",
+                        paste(other_controls, collapse = " & "), " \\\\")
+      idx <- inner_mid[1]
+      body_rows <- c(body_rows[seq_len(idx - 1)],
+                     row_txt,
+                     body_rows[idx:length(body_rows)])
+    }
+  }
 
   # ---- 6. Extra note from custom.note = "..." (texreg \tiny wrapper) ----
   note_idx  <- grep("\\\\multicolumn.*\\\\tiny", lines)
@@ -1228,19 +1260,11 @@ coef_map_h3 <- list(
 )
 
 coef_map_h4 <- list(
-  "atopally"             = "ATOP Alliance",
-  "atopally:democracy_c" = "Alliance × Democracy",
-  "log_disp_trade"       = "Disputed Sector Trade",
-  "exp_dep_cr"      = "Export Dependence (Sector)",
-  "log_total_trade" = "Bilateral Trade",
-  "gdppc_diff"      = "GDP/cap Gap",
-  "log_gdppc_c"     = "GDP/cap: Complainant",
-  "log_gdppc_r"     = "GDP/cap: Respondent",
-  "ip_distance"     = "UN Voting Distance",
-  "democracy_c"     = "Complainant Democracy",
+  "atopally"        = "ATOP Alliance",
+  "severity_score"  = "Dispute Severity",
+  "exp_dep_cr"      = "Export Dependence",
   "log_cum_comp"    = "Cumul. Complaints",
   "log_cum_resp"    = "Cumul. Respondent",
-  "n_third_parties" = "N Third Parties",
   "is_product_case" = "Product Case"
 )
 
@@ -1394,17 +1418,17 @@ h4_pvs <- list(
   clust_h4_4[, "Pr(>|t|)"]
 )
 
-cat("\n====== H4: OLS — Political Framing Intensity ======\n")
+cat("\n====== H4: OLS — Bilateral Disputed Trade ======\n")
 screenreg(
   list(lm_h4_1, lm_h4_2, lm_h4_3, lm_h4_4),
-  override.se      = h4_ses,
-  override.pvalues = h4_pvs,
-  custom.model.names = c("H4.1 Econ", "H4.2 +Controls",
-                         "H4.3 +Political", "H4.4 +Type"),
-  custom.coef.map  = coef_map_h4,
-  omit.coef        = "decade",
-  digits           = 3,
-  caption = "OLS: Alliance and Political Framing Intensity (H4)"
+  override.se        = h4_ses,
+  override.pvalues   = h4_pvs,
+  custom.model.names = c("H4.1 Core", "H4.2 +Economic",
+                         "H4.3 +Political", "H4.4 Full"),
+  custom.coef.map    = coef_map_h4,
+  omit.coef          = "democracy_c|log_gdppc|ip_distance|n_third_parties|decade",
+  digits             = 3,
+  caption = "OLS: Alliance and Bilateral Disputed Trade (H4)"
 )
 
 # ---------------------------------------------------------------------------
@@ -1415,34 +1439,35 @@ texreg(
   override.se        = h4_ses,
   override.pvalues   = h4_pvs,
   file               = "Data/Output/h4_ols_results.tex",
-  custom.model.names = c("Baseline", "+Economic", "+Political", "+Type"),
+  custom.model.names = c("Core IVs", "+Economic", "+Political", "Full"),
   custom.coef.map    = coef_map_h4,
-  omit.coef          = "decade",
+  omit.coef          = "democracy_c|log_gdppc|ip_distance|n_third_parties|decade",
   digits             = 3,
-  caption            = "Alliance and Political Framing Intensity of WTO Disputes: OLS (H4)",
+  caption            = "Alliance and Bilateral Disputed Trade: OLS (H4)",
   caption.above      = TRUE,
   label              = "tab:h4_ols",
   use.packages       = FALSE,
   booktabs           = TRUE,
   custom.note        = ""
 )
-post_process_tex("Data/Output/h4_ols_results.tex")
+post_process_tex("Data/Output/h4_ols_results.tex",
+                 other_controls = c("No", "Yes", "Yes", "Yes"))
 cat("H4 OLS LaTeX saved.\n")
 
 modelsummary(
-    list("(1) Baseline"   = lm_h4_1,
+    list("(1) Core"       = lm_h4_1,
          "(2) +Economic"  = lm_h4_2,
          "(3) +Political" = lm_h4_3,
-         "(4) +Type"      = lm_h4_4),
+         "(4) Full"       = lm_h4_4),
     vcov     = list(vcovCL(lm_h4_1, cluster = ~ iso3_c),
                     vcovCL(lm_h4_2, cluster = ~ iso3_c),
                     vcovCL(lm_h4_3, cluster = ~ iso3_c),
                     vcovCL(lm_h4_4, cluster = ~ iso3_c)),
-    coef_map = coef_map_h4,
-    coef_omit = "decade",
+    coef_map  = coef_map_h4,
+    add_rows  = add_rows_h4,
     stars    = c("*" = 0.05, "**" = 0.01, "***" = 0.001),
     gof_map  = c("nobs", "r.squared", "adj.r.squared"),
-    title    = "Alliance and Political Framing Intensity of WTO Disputes: OLS (H4)"
+    title    = "Alliance and Bilateral Disputed Trade: OLS (H4)"
 )
 
 # ===========================================================================
@@ -1469,9 +1494,12 @@ coef_map_h3_main <- list(
 )
 
 coef_map_h4_main <- list(
-  "atopally"       = "ATOP Alliance",
-  "log_disp_trade" = "Disputed Sector Trade",
-  "exp_dep_cr"     = "Export Dependence (Sector)"
+  "atopally"        = "ATOP Alliance",
+  "severity_score"  = "Dispute Severity",
+  "exp_dep_cr"      = "Export Dependence",
+  "log_cum_comp"    = "Cumul. Complaints",
+  "log_cum_resp"    = "Cumul. Respondent",
+  "is_product_case" = "Product Case"
 )
 
 # ---- H2 ordlogit: main paper table ----
@@ -1538,18 +1566,19 @@ texreg(
   override.se        = h4_ses,
   override.pvalues   = h4_pvs,
   file               = "Data/Output/h4_ols_main.tex",
-  custom.model.names = c("Baseline", "+Economic", "+Political", "+Type"),
+  custom.model.names = c("Core IVs", "+Economic", "+Political", "Full"),
   custom.coef.map    = coef_map_h4_main,
-  omit.coef          = "decade",
+  omit.coef          = "democracy_c|log_gdppc|ip_distance|n_third_parties|decade",
   digits             = 3,
-  caption            = "Alliance and Political Framing of WTO Disputes: OLS (H4)",
+  caption            = "Alliance and Bilateral Disputed Trade: OLS (H4)",
   caption.above      = TRUE,
   label              = "tab:h4_ols",
   use.packages       = FALSE,
   booktabs           = TRUE,
   custom.note        = ""
 )
-post_process_tex("Data/Output/h4_ols_main.tex")
+post_process_tex("Data/Output/h4_ols_main.tex",
+                 other_controls = c("No", "Yes", "Yes", "Yes"))
 cat("H4 OLS main table saved.\n")
 
 # ---------------------------------------------------------------------------
